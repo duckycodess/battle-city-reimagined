@@ -1,9 +1,11 @@
 """Headless setup for the client tests.
 
-Importing :mod:`client_helpers` is what sets the SDL driver variables, and it happens
-here so that the variables are in place before any test module imports pygame. pytest
-loads a conftest before the tests beside it, which makes this the only ordering the
-suite has to rely on.
+:mod:`client_helpers` sets the SDL driver variables when it is imported. SDL reads them
+when a subsystem is initialised, not when pygame is imported, so what has to hold is that
+nothing initialises a display before that module has been imported -- and
+:func:`client_helpers.ensure_display` is the only thing in this package that initialises
+one. pytest loads a conftest before the tests beside it, so importing ``client_helpers``
+here puts the variables in place before any test can ask for a display.
 """
 
 from __future__ import annotations

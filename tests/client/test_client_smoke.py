@@ -10,6 +10,7 @@ reaches the simulation, and a frame is drawn and presented.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 
 import pygame
 import pytest
@@ -27,7 +28,8 @@ from battle_city_client.intents import Action
 from battle_city_client.shell import PauseCause, Screen
 from battle_city_client.stage_adapter import StageAdapterError
 from battle_city_client.timing import NOMINAL_TICK_RATE, FixedTickAccumulator
-from client_helpers import ensure_display, finished_session, observed
+from battle_city_sim import RunOutcome
+from client_helpers import ensure_display, finished_session, observed, with_outcome
 
 
 @pytest.fixture
@@ -298,3 +300,63 @@ def test_main_shuts_pygame_down_when_the_content_pack_is_unusable(
     assert main([]) == 1
     assert "broken" in capsys.readouterr().out
     assert not pygame.get_init()
+
+
+def _end_the_run_in_place(app: ClientApp) -> None:
+    """Give the live session a terminal outcome without leaving the playing screen.
+
+    The shell then moves itself to the terminal screen from inside ``advance``, which is
+    the transition under test: no keystroke is involved, so nothing tidies up after it
+    unless the frame does. Assembled by the test because this build has no enemy
+    behaviour and no live run can end on its own.
+    """
+    session = app.shell.session
+    assert session is not None
+    app.shell.session = replace(
+        session, state=with_outcome(session.state, RunOutcome.BASE_DESTROYED)
+    )
+
+
+def test_a_run_ending_forgets_held_keys(app: ClientApp) -> None:
+    """The shell can leave the playing screen without a key press behind it."""
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_SPACE)
+    assert Action.FIRE in app.held
+
+    _end_the_run_in_place(app)
+    app.advance_frame(16)
+
+    assert observed(app.shell.screen) is Screen.RUN_OVER
+    assert app.held.ordered() == ()
+
+
+def test_retrying_after_a_run_ends_does_not_inherit_a_held_fire_key(app: ClientApp) -> None:
+    """Regression: the fire key held as the run ended used to survive into the retry."""
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_SPACE)
+    _end_the_run_in_place(app)
+    app.advance_frame(16)
+    assert observed(app.shell.screen) is Screen.RUN_OVER
+
+    _key(app, pygame.K_RETURN)
+    assert observed(app.shell.screen) is Screen.PLAYING
+    assert Action.FIRE not in app.held
+    _silent_run(app)
+
+
+def test_banked_wall_time_does_not_survive_a_run_ending(app: ClientApp) -> None:
+    """The other half of the same moment: a retry must not open with catch-up ticks."""
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_RETURN)
+    app.advance_frame(10)
+    assert app.accumulator.pending_milliseconds > 0
+
+    _end_the_run_in_place(app)
+    app.advance_frame(16)
+    assert app.accumulator.pending_milliseconds == 0
+
+    _key(app, pygame.K_RETURN)
+    assert observed(app.shell.screen) is Screen.PLAYING
+    assert app.advance_frame(8) == 0

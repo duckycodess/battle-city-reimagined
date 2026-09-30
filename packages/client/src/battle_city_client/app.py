@@ -134,19 +134,39 @@ class ClientApp:
     def _set_focused(self, focused: bool) -> None:
         """Track focus, and forget held keys when the window stops receiving releases."""
         if not focused:
-            self.held.clear()
-            self.accumulator.reset()
+            self._stop_driving()
         self.shell.set_focused(focused)
+
+    def _stop_driving(self) -> None:
+        """Drop banked wall time and held keys together.
+
+        The two belong to the same moment. Once the shell stops consuming ticks nothing
+        is sampling the keyboard, so both the elapsed time and the keys that were down
+        describe a stretch the run did not live through. Keeping either one means the
+        next run inherits it: banked time as a burst of catch-up ticks, a held key as an
+        action the player never pressed for that run.
+        """
+        self.accumulator.reset()
+        self.held.clear()
 
     # -- frame -----------------------------------------------------------------
 
     def advance_frame(self, elapsed_ms: int) -> int:
-        """Consume ``elapsed_ms`` of wall time and advance the run. Returns ticks run."""
+        """Consume ``elapsed_ms`` of wall time and advance the run. Returns ticks run.
+
+        The shell can stop consuming ticks inside :meth:`ClientShell.advance` rather than
+        under a keystroke: a run that reaches a terminal outcome leaves for the terminal
+        screen on its own. That transition has no key press behind it to tidy up after
+        it, so it is tidied up here -- otherwise a fire key held as the run ended would
+        still be held when the player chose *retry*, and the next run would open with a
+        shot nobody asked for.
+        """
+        ticks = 0
+        if self.shell.consumes_ticks:
+            ticks = self.accumulator.advance(elapsed_ms)
+            self.shell.advance(ticks, self.held.intent())
         if not self.shell.consumes_ticks:
-            self.accumulator.reset()
-            return 0
-        ticks = self.accumulator.advance(elapsed_ms)
-        self.shell.advance(ticks, self.held.intent())
+            self._stop_driving()
         return ticks
 
     def draw(self) -> None:
