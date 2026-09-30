@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "classic",
+  "version": "1.0.0",
+  "name": "Classic stages",
+  "content_schema_version": 1,
+  "authors": ["Battle City Reimagined contributors"],
+  "license": {
+    "spdx_id": "NOASSERTION",
+    "notice": "The three layouts were converted from stage data in the historical duckycodess/Battle-City repository at revision 5c9d81cd0de89a05f5946448d19c40fb343b0a2d, which publishes no licence. This pack therefore asserts no licence over that layout data and makes no claim on the reader's behalf; NOASSERTION is the SPDX value for exactly that. The JSON encoding, the manifest and the schemas are part of this rebuild."
+  },
+  "levels": [
+    {
+      "id": "classic-01",
+      "path": "levels/classic-01.json"
+    },
+    {
+      "id": "classic-02",
+      "path": "levels/classic-02.json"
+    },
+    {
+      "id": "classic-03",
+      "path": "levels/classic-03.json"
+    }
+  ]
+}

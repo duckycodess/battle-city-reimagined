@@ -2,35 +2,46 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/duckycodess/battle-city-reimagined/blob/main/packages/content/src/battle_city_content/schemas/classic-level.schema.json",
   "title": "Battle City Reimagined classic level",
+  "description": "A 16x16 classic-format level. This file is the schema for schema_version 1 and keeps its path and $id so existing consumers keep resolving it; a later grid format ships as classic-level.v2.schema.json beside it rather than editing this one, so levels pinned to version 1 keep loading.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "id", "name", "source", "grid", "spawns"],
+  "required": ["schema_version", "id", "name", "grid", "spawns"],
   "properties": {
     "schema_version": {
       "const": 1
     },
     "id": {
+      "description": "Stable identifier. Renaming a level is a new identifier, not an edit.",
       "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
     },
     "name": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 120
     },
     "source": {
+      "description": "Provenance for a converted level. Absent for levels authored here; no licence is asserted over converted data, which the pack manifest states.",
       "type": "object",
       "additionalProperties": false,
       "required": ["repository", "revision", "path"],
       "properties": {
         "repository": {
-          "const": "https://github.com/duckycodess/Battle-City"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^https://[^\\s]+$"
         },
         "revision": {
           "type": "string",
           "pattern": "^[0-9a-f]{40}$"
         },
         "path": {
-          "const": "assets/stage.py"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         }
       }
     },
@@ -46,6 +57,7 @@
           "const": 16
         },
         "rows": {
+          "description": "Top-to-bottom rows of left-to-right tile codes, as the content specification defines them.",
           "type": "array",
           "minItems": 16,
           "maxItems": 16,
@@ -62,17 +74,37 @@
       "required": ["players", "enemies"],
       "properties": {
         "players": {
+          "description": "The upper bound is grid capacity, not a game rule: spawns must be distinct empty cells, so a 16x16 grid cannot hold more than 256 of them. Slot numbering is unbounded above; the loader rejects duplicate slots and shared cells.",
           "type": "array",
           "minItems": 1,
+          "maxItems": 256,
           "items": {
             "$ref": "#/$defs/playerSpawn"
           }
         },
         "enemies": {
+          "description": "Bounded by grid capacity, as for players.",
           "type": "array",
           "minItems": 1,
+          "maxItems": 256,
           "items": {
             "$ref": "#/$defs/spawn"
+          }
+        }
+      }
+    },
+    "waves": {
+      "description": "Optional, forward-declared enemy waves. A wave states only how many enemy tanks it releases; variant mix, cadence and win timing belong to the campaign phase that owns wave behaviour. Nothing in the content package interprets this field, and the converted classic levels omit it because the historical stage data carries no wave information.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["enemies"],
+        "properties": {
+          "enemies": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       }

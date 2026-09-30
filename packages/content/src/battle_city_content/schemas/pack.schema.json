@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/duckycodess/battle-city-reimagined/blob/main/packages/content/src/battle_city_content/schemas/pack.schema.json",
+  "title": "Battle City Reimagined level pack manifest",
+  "description": "A manifest naming the levels of one pack, in campaign order. This file is the schema for schema_version 1; a later manifest format ships as pack.v2.schema.json beside it rather than editing this one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "name",
+    "content_schema_version",
+    "authors",
+    "license",
+    "levels"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Version of this manifest format. Bumping it means a new schema file, not an edit to this one.",
+      "const": 1
+    },
+    "id": {
+      "description": "Stable pack identifier, unchanged across edits.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "version": {
+      "description": "Pack content version, major.minor.patch.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "content_schema_version": {
+      "description": "Level schema version every level in this pack is written against. The loader rejects a pack whose value this build does not support, and a level whose own schema_version disagrees with it.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "authors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      }
+    },
+    "license": {
+      "description": "What the pack claims about rights in its data. Converted historical layouts assert nothing, which SPDX spells NOASSERTION.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx_id", "notice"],
+      "properties": {
+        "spdx_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9.+-]+$"
+        },
+        "notice": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "levels": {
+      "description": "Levels in campaign order. Identifiers are unique within the pack and each path is relative to the pack root, which defaults to the directory holding this manifest. The upper bound is a load bound rather than a game rule: every entry is a file the loader opens before it returns anything, so an unbounded list lets one small manifest ask for unbounded work. 256 sits far above the 35 stages of the classic campaign, so a real campaign never meets it.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/levelEntry"
+      }
+    }
+  },
+  "$defs": {
+    "levelEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path"],
+      "properties": {
+        "id": {
+          "description": "Must equal the id declared by the level file itself.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "path": {
+          "description": "Forward-slash path to the level file, relative to the pack root. The loader additionally rejects '.', '..' and any path that resolves outside that root.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\\.json$"
+        }
+      }
+    }
+  }
+}
