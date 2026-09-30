@@ -17,6 +17,11 @@ whole loop runs headless, which is how the tests drive it::
 
     SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy uv run --locked pytest tests/client
 
+Importing this package does not import pygame. The names backed by it are resolved on
+first access; see :data:`_LAZY_EXPORTS`. ``README.md`` beside this file records why, how
+the screen captures are refreshed, and one limitation of the simulation's import-purity
+test that this package cannot fix from inside its own allowed files.
+
 What this build is
 ------------------
 A playable client foundation. Movement, firing, terrain damage, brick decay, projectile
@@ -49,11 +54,10 @@ Layout
 ``app``            the pygame loop, and the only module that touches a device
 """
 
-from .app import ClientApp, build_app, main
-from .assets import AssetLibrary, ProceduralAssetLibrary
-from .display import Presenter, integer_scale, present_rect
+from importlib import import_module
+from typing import TYPE_CHECKING, Any, Final
+
 from .intents import Action, HeldActions, PlayerIntent, intent_from_held
-from .rendering import Renderer
 from .session import DEFAULT_SEED, StageSession
 from .shell import ClientShell, PauseCause, Screen
 from .stage_adapter import (
@@ -64,6 +68,51 @@ from .stage_adapter import (
     stage_from_level,
 )
 from .timing import NOMINAL_TICK_RATE, FixedTickAccumulator
+
+if TYPE_CHECKING:
+    from .app import ClientApp, build_app, main
+    from .assets import AssetLibrary, ProceduralAssetLibrary
+    from .display import Presenter, integer_scale, present_rect
+    from .rendering import Renderer
+
+_LAZY_EXPORTS: Final[dict[str, str]] = {
+    "AssetLibrary": ".assets",
+    "ClientApp": ".app",
+    "Presenter": ".display",
+    "ProceduralAssetLibrary": ".assets",
+    "Renderer": ".rendering",
+    "build_app": ".app",
+    "integer_scale": ".display",
+    "main": ".app",
+    "present_rect": ".display",
+}
+"""Names whose module imports pygame, resolved on first use rather than on import.
+
+Importing the client package must not import pygame. The repository's bootstrap contract
+imports every workspace package in one interpreter, and the simulation's purity test
+then asserts that no display library was pulled in; a package that reaches for pygame
+merely to publish a name makes that assertion about the client rather than about the
+simulation. It is also plain good manners: a tool that only wants
+:func:`stage_from_level` or :class:`FixedTickAccumulator` should not pay for SDL.
+
+The names below behave exactly as if they were imported here -- ``from
+battle_city_client import Renderer`` works, and a type checker sees the real class
+through the ``TYPE_CHECKING`` block above -- but the module behind each one is imported
+on first access.
+"""
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve a pygame-backed export on first access. See :data:`_LAZY_EXPORTS`."""
+    module = _LAZY_EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(import_module(module, __name__), name)
+
+
+def __dir__() -> list[str]:
+    return sorted(__all__)
+
 
 __all__ = [
     "DEFAULT_SEED",

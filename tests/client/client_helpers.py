@@ -222,13 +222,36 @@ def finished_session(
 # -- capture -----------------------------------------------------------------
 
 
+REFRESH_CAPTURES_ENV: str = "BATTLE_CITY_REFRESH_CAPTURES"
+"""Set to ``1`` to rewrite the captures tracked in git. See :func:`capture_directory`."""
+
+
+def capture_directory(scratch: Path) -> Path:
+    """Where a capture run should write.
+
+    Ordinary runs write to ``scratch`` -- a pytest ``tmp_path`` -- so that ``pytest`` and
+    ``make ci`` never leave the working tree dirty. The committed captures carry
+    machine-specific metadata (SDL build, Python version, platform), so regenerating them
+    as a side effect of running the suite would turn every unrelated test run into a diff
+    and every contributor's machine into a different one. Refreshing them is a deliberate
+    act::
+
+        BATTLE_CITY_REFRESH_CAPTURES=1 \\
+            uv run --locked pytest tests/client/test_client_screenshots.py
+
+    The rendering itself runs either way, so the captures cannot silently stop being
+    reproducible between refreshes.
+    """
+    return SCREENSHOT_DIR if os.environ.get(REFRESH_CAPTURES_ENV) == "1" else scratch
+
+
 def capture(
     shell: ClientShell,
     name: str,
     *,
+    directory: Path,
     scale: int = 2,
     fixture: bool = False,
-    directory: Path = SCREENSHOT_DIR,
 ) -> Path:
     """Render ``shell`` and write a PNG, stamping a banner on injected states."""
     directory.mkdir(parents=True, exist_ok=True)

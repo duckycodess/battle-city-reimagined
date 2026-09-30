@@ -14,10 +14,20 @@ from collections.abc import Iterator
 import pygame
 import pytest
 from battle_city_client import theme
-from battle_city_client.app import DEFAULT_FRAME_CAP, ClientApp, build_app, main, parse_args
+from battle_city_client.app import (
+    DEFAULT_FRAME_CAP,
+    MAX_FRAME_CAP,
+    MIN_FRAME_CAP,
+    ClientApp,
+    build_app,
+    main,
+    parse_args,
+)
+from battle_city_client.intents import Action
 from battle_city_client.shell import PauseCause, Screen
+from battle_city_client.stage_adapter import StageAdapterError
 from battle_city_client.timing import NOMINAL_TICK_RATE, FixedTickAccumulator
-from client_helpers import ensure_display, observed
+from client_helpers import ensure_display, finished_session, observed
 
 
 @pytest.fixture
@@ -177,3 +187,114 @@ def test_main_reports_a_missing_display_instead_of_crashing(
     monkeypatch.setattr(pygame.display, "init", refuse)
     assert main([]) == 2
     assert "no usable display" in capsys.readouterr().out
+
+
+# -- the menu key must not reach the tank -------------------------------------
+
+
+def _silent_run(app: ClientApp, frames: int = 20) -> None:
+    """Advance a run and assert no projectile ever appears."""
+    for _ in range(frames):
+        app.step(16)
+        session = app.shell.session
+        assert session is not None
+        assert session.state.projectiles == (), "a menu keystroke reached the tank"
+
+
+def test_starting_a_stage_with_space_does_not_fire_the_first_shot(app: ClientApp) -> None:
+    """``SPACE`` confirms a menu and fires a tank; the confirming press must not do both.
+
+    Regression: held actions used to be banked on every key press regardless of screen,
+    so the press that chose the stage was still down when the run began and the tank
+    opened fire on tick zero.
+    """
+    _key(app, pygame.K_SPACE)
+    _key(app, pygame.K_SPACE)
+    assert observed(app.shell.screen) is Screen.PLAYING
+    assert Action.FIRE not in app.held
+    _silent_run(app)
+
+
+def test_resuming_with_space_does_not_fire(app: ClientApp) -> None:
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_RETURN)
+    app.step(16)
+    _key(app, pygame.K_ESCAPE)
+    assert observed(app.shell.screen) is Screen.PAUSED
+    _key(app, pygame.K_SPACE)
+    assert observed(app.shell.screen) is Screen.PLAYING
+    assert Action.FIRE not in app.held
+    _silent_run(app)
+
+
+def test_retrying_a_finished_run_with_space_does_not_fire(app: ClientApp) -> None:
+    app.shell.open_session(finished_session(stage=app.shell.catalog[0].stage, ticks=10))
+    assert observed(app.shell.screen) is Screen.RUN_OVER
+    _key(app, pygame.K_SPACE)
+    assert observed(app.shell.screen) is Screen.PLAYING
+    assert Action.FIRE not in app.held
+    _silent_run(app)
+
+
+def test_space_during_a_run_still_fires(app: ClientApp) -> None:
+    """The other half of the fix: the control must still work where it is a control."""
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_SPACE)
+    assert Action.FIRE in app.held
+    fired = False
+    for _ in range(20):
+        app.step(16)
+        session = app.shell.session
+        assert session is not None
+        fired = fired or bool(session.state.projectiles)
+    assert fired
+
+
+def test_pausing_forgets_held_keys(app: ClientApp) -> None:
+    """Nothing samples input on the pause screen, so what was held there is stale."""
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_RETURN)
+    _key(app, pygame.K_DOWN)
+    assert Action.MOVE_DOWN in app.held
+    _key(app, pygame.K_ESCAPE)
+    assert observed(app.shell.screen) is Screen.PAUSED
+    assert app.held.ordered() == ()
+
+
+def test_menu_navigation_never_banks_a_gameplay_control(app: ClientApp) -> None:
+    """``W``, ``S`` and ``SPACE`` drive a cursor outside a run and nothing else."""
+    for key in (pygame.K_w, pygame.K_s, pygame.K_SPACE):
+        _key(app, key)
+        assert app.held.ordered() == ()
+    assert observed(app.shell.screen) is not Screen.MAIN_MENU
+
+
+# -- launch options and shutdown ----------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["0", "-1", str(MAX_FRAME_CAP + 1), "fast"])
+def test_an_unusable_frame_cap_is_refused(value: str) -> None:
+    """``Clock.tick(0)`` means "never wait", which is a busy spin rather than an error."""
+    with pytest.raises(SystemExit):
+        parse_args(["--frame-cap", value])
+
+
+@pytest.mark.parametrize("value", [MIN_FRAME_CAP, 60, MAX_FRAME_CAP])
+def test_a_usable_frame_cap_is_accepted(value: int) -> None:
+    assert parse_args(["--frame-cap", str(value)]).frame_cap == value
+
+
+def test_main_shuts_pygame_down_when_the_content_pack_is_unusable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The early exit used to leave SDL initialised, and a window with nothing driving it."""
+    ensure_display()
+
+    def refuse(**_: object) -> ClientApp:
+        raise StageAdapterError("bundled pack: levels/classic-01.json: broken")
+
+    monkeypatch.setattr("battle_city_client.app.build_app", refuse)
+    assert main([]) == 1
+    assert "broken" in capsys.readouterr().out
+    assert not pygame.get_init()

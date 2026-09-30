@@ -37,7 +37,7 @@ from .intents import Action, HeldActions
 from .keymap import edge_action_for, held_action_for
 from .rendering import Renderer
 from .session import DEFAULT_SEED
-from .shell import ClientShell
+from .shell import ClientShell, Screen
 from .stage_adapter import StageAdapterError, bundled_stage_catalog
 from .timing import NOMINAL_TICK_RATE, FixedTickAccumulator
 
@@ -47,6 +47,10 @@ DEFAULT_FRAME_CAP: int = 120
 A cap above the tick rate keeps input latency low without spinning a core; the
 accumulator makes the exact number irrelevant to how the run plays.
 """
+
+MIN_FRAME_CAP: int = 1
+MAX_FRAME_CAP: int = 1000
+"""Bounds for ``--frame-cap``. Zero means "never wait" to pygame, which is a busy spin."""
 
 WINDOW_CAPTION: str = "Battle City Reimagined"
 
@@ -99,10 +103,23 @@ class ClientApp:
             self.handle_event(event)
 
     def _handle_key_down(self, key: int) -> None:
-        held = held_action_for(key)
-        if held is not None:
-            self.held.press(held)
-        edge = edge_action_for(key, self.shell.screen)
+        """Route one key press, recording it as held only while a run is being driven.
+
+        A key can be a continuous control on one screen and a menu control on another:
+        ``SPACE`` fires during a run and confirms a menu choice everywhere else. Banking
+        it as held regardless of the screen means the press that started the stage, or
+        resumed it, or retried it, is still down on the run's first tick, and the tank
+        opens fire on a keystroke the player aimed at a menu. Held state is therefore
+        only collected while the shell is actually sampling it, and is dropped whenever
+        the shell stops -- the same reasoning as losing window focus, where input keeps
+        happening but nothing is watching it.
+        """
+        screen = self.shell.screen
+        if screen is Screen.PLAYING:
+            held = held_action_for(key)
+            if held is not None:
+                self.held.press(held)
+        edge = edge_action_for(key, screen)
         if edge is None:
             return
         if edge is Action.SCALE_UP:
@@ -111,6 +128,8 @@ class ClientApp:
             self.presenter.step_scale(-1)
         else:
             self.shell.handle(edge)
+            if self.shell.screen is not Screen.PLAYING:
+                self.held.clear()
 
     def _set_focused(self, focused: bool) -> None:
         """Track focus, and forget held keys when the window stops receiving releases."""
@@ -190,15 +209,43 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--frame-cap",
-        type=int,
+        type=_frame_cap,
         default=DEFAULT_FRAME_CAP,
-        help="frames per second the loop aims for (default: %(default)s)",
+        help=(
+            f"frames per second the loop aims for, {MIN_FRAME_CAP}-{MAX_FRAME_CAP} "
+            "(default: %(default)s)"
+        ),
     )
     return parser.parse_args(argv)
 
 
+def _frame_cap(value: str) -> int:
+    """Parse and bound ``--frame-cap``.
+
+    ``pygame.time.Clock.tick(0)`` means "do not wait", so an unchecked zero turns the
+    loop into a busy spin that renders thousands of identical frames a second. The run
+    itself is unaffected -- the accumulator decides how many ticks a frame buys -- which
+    is exactly why the mistake would be invisible rather than obvious.
+    """
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from None
+    if not MIN_FRAME_CAP <= parsed <= MAX_FRAME_CAP:
+        raise argparse.ArgumentTypeError(
+            f"frame cap must be between {MIN_FRAME_CAP} and {MAX_FRAME_CAP}, found {parsed}"
+        )
+    return parsed
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Launch the client. Returns a process exit status."""
+    """Launch the client. Returns a process exit status.
+
+    Everything after the display comes up is wound down in one ``finally``, including the
+    paths that never reach the loop. A malformed content pack used to return early with
+    SDL still initialised, which leaves a window on screen with nothing driving it and
+    leaves the subsystem up for whatever runs next in the same interpreter.
+    """
     options = parse_args(argv)
     try:
         pygame.display.init()
@@ -206,11 +253,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"battle_city_client: no usable display: {error}")
         return 2
     try:
-        app = build_app(seed=options.seed, scale=options.scale, frame_cap=options.frame_cap)
-    except StageAdapterError as error:
-        print(f"battle_city_client: {error}")
-        return 1
-    try:
+        try:
+            app = build_app(seed=options.seed, scale=options.scale, frame_cap=options.frame_cap)
+        except StageAdapterError as error:
+            print(f"battle_city_client: {error}")
+            return 1
         app.run()
     finally:
         pygame.display.quit()

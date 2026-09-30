@@ -73,3 +73,63 @@ the body the simulation collides with.
 None. This build reads the bundled content pack and writes nothing: no settings file, no
 save, no log. Versioned settings and saves with atomic replacement are a persistence-phase
 deliverable.
+
+## Importing the package does not import pygame
+
+`import battle_city_client` pulls in the adapter, the tick accumulator, the intents, the
+session and the shell — none of which touch a device. The names backed by pygame
+(`ClientApp`, `Renderer`, `Presenter`, `ProceduralAssetLibrary`, `build_app`, `main`,
+`integer_scale`, `present_rect`) are resolved on first access through a module
+`__getattr__`. They behave exactly as if they were imported eagerly, and a type checker
+sees the real classes, but a tool that only wants `stage_from_level` or
+`FixedTickAccumulator` does not pay for SDL.
+
+This is also what keeps `tests/test_bootstrap.py` — which imports every workspace package
+in one interpreter — from loading a display library on the simulation's behalf.
+
+## Screen captures
+
+`tests/client/screenshots/` holds one PNG per screen plus a generated `README.md`
+recording the driver, scale, versions and seed that produced them. Ordinary test runs
+render every screen into a scratch directory and leave the tracked images alone, so
+`pytest` and `make ci` never dirty the working tree. Refresh them deliberately after a
+visual change:
+
+```sh
+BATTLE_CITY_REFRESH_CAPTURES=1   uv run --locked pytest tests/client/test_client_screenshots.py
+```
+
+## Known limitation: the simulation's import-purity check
+
+`tests/sim/test_purity.py::test_importing_the_simulation_does_not_pull_in_a_display_or_a_socket`
+reads the shared pytest interpreter's `sys.modules` and asserts no `pygame` module is
+present. That is a proxy for "importing `battle_city_sim` does not pull in a display",
+and it only measures what it claims while nothing else in the run has imported pygame.
+
+The client's own tests do import pygame. `tests/client/conftest.py` shuts pygame down and
+drops its modules once no client test remains — after the last one, or at the end of
+collection when a `-k` filter has deselected them all. That restores the precondition,
+and it weakens nothing: the substantive assertions in that file read the simulation's
+source with `ast` and are unaffected by anything happening in this process.
+
+Two things were fixed rather than papered over. Importing `battle_city_client` no longer
+imports pygame, so the bootstrap contract is clean on its own. And the release fires
+exactly once, decided from the final selected item list, so it cannot strand a later
+client test with pygame missing from `sys.modules`.
+
+**Residual risk, stated plainly.** pytest imports every selected test module during
+collection, so pygame is in `sys.modules` before the first test of the session runs. A
+conftest under `tests/client` can only put it back afterwards. A session that runs the
+purity test *before* the last client test still fails it:
+
+```sh
+uv run --locked pytest tests/sim tests/client   # fails: purity runs first
+```
+
+Nothing inside this issue's allowed files can prevent that, and reordering another
+package's tests from this directory would be a worse cure than the disease. Every
+invocation the project actually uses passes — `make ci`, `pytest`, `pytest tests`,
+`pytest tests/client`, `pytest tests/sim`, `pytest tests/test_bootstrap.py
+tests/sim/test_purity.py`, and `-k` selections. The check is only genuinely testable in a
+subprocess that imports `battle_city_sim` alone, which means editing `tests/sim`.
+Tracked as issue #22.
