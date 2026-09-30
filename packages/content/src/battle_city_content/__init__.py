@@ -12,10 +12,13 @@ unique player slots — and reports a violation as a content error naming the fi
 
 Loading is all-or-nothing and never executes content::
 
-    from battle_city_content import load_pack
+    from battle_city_content import load_bundled_pack
 
-    pack = load_pack("packs/classic.json")
+    pack = load_bundled_pack()
     level = pack.level("classic-01")
+
+A pack from outside this package is loaded with :func:`load_pack`, which takes the
+manifest path and an optional pack root that every level path must stay inside.
 
 Every document declares its ``schema_version``, and each version has its own schema
 file: ``classic-level.schema.json`` and ``pack.schema.json`` are version 1, and a later

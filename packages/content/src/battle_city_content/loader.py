@@ -59,9 +59,16 @@ _GRID_ROW_FIELD: Final[re.Pattern[str]] = re.compile(r"grid\.rows\[(?P<index>\d+
 def load_level(path: str | os.PathLike[str]) -> Level:
     """Load and fully validate one level file.
 
-    Raises :class:`ContentValidationError` naming ``path`` and the offending field.
+    ``path`` is resolved before anything is read, so one file has one origin however it
+    was reached. ``load_pack`` already resolves the paths it declares, to check that they
+    stay inside the pack root; without resolving here, the same level loaded directly
+    through a relative path or a symlink would carry a different ``Level.origin`` and
+    report its errors against a different name.
+
+    Raises :class:`ContentValidationError` naming the resolved file and the offending
+    field.
     """
-    level_path = Path(os.fspath(path))
+    level_path = Path(os.fspath(path)).resolve()
     document = read_json_object(level_path)
     try:
         _level_schema().validate(document, path=level_path)

@@ -1,4 +1,4 @@
-"""A small JSON Schema validator for the checked-in content schemas.
+r"""A small JSON Schema validator for the checked-in content schemas.
 
 Content is validated against a schema document that ships with this package, so the
 contract is reviewable data rather than hand-written Python branches. The validator
@@ -16,6 +16,11 @@ Deliberate restrictions
   Python says ``isinstance(True, int)``, and ``1.0`` is rejected rather than coerced.
 * ``const`` and ``enum`` compare the same way: ``1``, ``1.0`` and ``true`` are three
   different values here, where JSON Schema would call the first two equal.
+* ``pattern`` is applied with :func:`re.Pattern.search`, as JSON Schema requires, so an
+  unanchored pattern stays unanchored. A trailing ``$`` is compiled as ``\Z``: Python's
+  ``$`` also matches just before a final newline, so ``"classic-01\n"`` would otherwise
+  satisfy an identifier pattern that reads as if it forbade the newline. A ``$`` anywhere
+  else is rejected at compile time rather than validated with that looseness.
 """
 
 from __future__ import annotations
@@ -258,12 +263,7 @@ def _compile_node(
     if pattern is not None:
         if not isinstance(pattern, str):
             raise ContentSchemaError(f"{name}: {location} declares a non-string pattern")
-        try:
-            patterns[pattern] = re.compile(pattern)
-        except re.error as error:
-            raise ContentSchemaError(
-                f"{name}: {location} declares an invalid pattern {pattern!r}: {error}"
-            ) from error
+        patterns[pattern] = _compile_pattern(pattern, name=name, location=location)
 
     properties = node.get("properties")
     if properties is not None:
@@ -285,6 +285,61 @@ def _compile_node(
         if not isinstance(items, dict):
             raise ContentSchemaError(f"{name}: {location}.items must be an object")
         _compile_node(items, name=name, location=f"{location}/items", defs=defs, patterns=patterns)
+
+
+def _compile_pattern(pattern: str, *, name: str, location: str) -> re.Pattern[str]:
+    r"""Compile ``pattern`` so that a trailing ``$`` means the end of the string.
+
+    Patterns are matched with ``search``, which is what JSON Schema specifies, so an
+    unanchored pattern is left alone. What is not left alone is the end anchor: Python's
+    ``$`` matches at the end of the string *or* just before a final newline, so
+    ``^[a-z0-9-]+$`` accepts ``"classic-01\n"`` even though the schema reads as if it
+    forbade it. Compiling the trailing ``$`` as ``\Z`` makes the anchor mean what the
+    schema says, and stops a trailing newline from riding along in an identifier, a
+    version, a revision or a path.
+
+    A ``$`` anywhere other than the final position carries the same looseness with no
+    translation that preserves its intent, so it is refused here instead. That is a
+    defect in a checked-in schema, not in the content being loaded.
+    """
+    anchors = _end_anchors(pattern)
+    if anchors and anchors != (len(pattern) - 1,):
+        raise ContentSchemaError(
+            f"{name}: {location} declares pattern {pattern!r} with '$' before its end; "
+            f"only a single trailing '$' is supported"
+        )
+    source = f"{pattern[:-1]}\\Z" if anchors else pattern
+    try:
+        return re.compile(source)
+    except re.error as error:
+        raise ContentSchemaError(
+            f"{name}: {location} declares an invalid pattern {pattern!r}: {error}"
+        ) from error
+
+
+def _end_anchors(pattern: str) -> tuple[int, ...]:
+    """Return the offsets of every ``$`` in ``pattern`` that anchors rather than matches.
+
+    A ``$`` that is escaped, or that sits inside a character class, is a literal dollar
+    sign and is not reported. The scan is deliberately simple; a pattern it misreads is
+    still compiled by :mod:`re` afterwards, which rejects anything malformed.
+    """
+    offsets: list[int] = []
+    escaped = False
+    in_class = False
+    for offset, character in enumerate(pattern):
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif in_class:
+            if character == "]":
+                in_class = False
+        elif character == "[":
+            in_class = True
+        elif character == "$":
+            offsets.append(offset)
+    return tuple(offsets)
 
 
 def _fail(path: Path, field: str, message: str) -> NoReturn:

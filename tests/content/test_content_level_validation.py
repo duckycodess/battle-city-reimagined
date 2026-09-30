@@ -14,6 +14,7 @@ import pytest
 from battle_city_content import (
     ContentValidationError,
     GridCell,
+    Level,
     LevelSource,
     PlayerSpawn,
     TileCode,
@@ -23,7 +24,7 @@ from battle_city_content import (
 from content_helpers import FREE_CELL, SYNTHETIC_ROWS, mutated_level, rejection, write_json
 
 
-def load(tmp_path: Path, document: dict[str, Any], name: str = "level.json") -> Any:
+def load(tmp_path: Path, document: dict[str, Any], name: str = "level.json") -> Level:
     return load_level(write_json(tmp_path / name, document))
 
 
@@ -53,9 +54,9 @@ def test_a_valid_synthetic_level_loads(tmp_path: Path) -> None:
 def test_a_loaded_level_is_immutable(tmp_path: Path) -> None:
     level = load(tmp_path, mutated_level(lambda document: None))
     with pytest.raises(dataclasses.FrozenInstanceError):
-        level.level_id = "other"
+        level.level_id = "other"  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
-        level.grid.width = 8
+        level.grid.width = 8  # type: ignore[misc]
     assert isinstance(level.grid.rows, tuple)
     assert isinstance(level.player_spawns, tuple)
     assert isinstance(level.enemy_spawns, tuple)
@@ -111,9 +112,27 @@ def test_an_unsupported_schema_version_is_rejected(tmp_path: Path, version: Any)
 
 
 @pytest.mark.parametrize(
-    "level_id", ["Classic-01", "classic_01", "classic--01", "-classic", "classic-", "", "classic 1"]
+    "level_id",
+    [
+        "Classic-01",
+        "classic_01",
+        "classic--01",
+        "-classic",
+        "classic-",
+        "",
+        "classic 1",
+        "classic-01\n",
+        "\nclassic-01",
+        "classic-01\nclassic-02",
+        "classic-01\r\n",
+    ],
 )
 def test_an_invalid_stable_identifier_is_rejected(tmp_path: Path, level_id: str) -> None:
+    """The newline cases are the ones a ``$`` anchor used to let through.
+
+    An identifier carrying a trailing newline would reach the pack, where it has to
+    equal the manifest entry, and every consumer that prints or keys on it.
+    """
     error = reject(tmp_path, mutated_level(lambda document: document.update(id=level_id)))
     assert error.field == "id"
 
@@ -384,6 +403,20 @@ def test_a_high_player_slot_is_accepted(tmp_path: Path) -> None:
                 }
             ),
             "source.tag",
+        ),
+        # A revision is a 40-character hex commit id and nothing else; a trailing
+        # newline used to satisfy the pattern's "$" and travel on into the record.
+        (
+            lambda document: document.update(
+                source={"repository": "https://x.invalid", "revision": "0" * 40 + "\n", "path": "a"}
+            ),
+            "source.revision",
+        ),
+        (
+            lambda document: document.update(
+                source={"repository": "https://x.invalid\n", "revision": "0" * 40, "path": "a"}
+            ),
+            "source.repository",
         ),
     ],
 )

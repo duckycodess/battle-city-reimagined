@@ -71,9 +71,10 @@
       }
     },
     "levels": {
-      "description": "Levels in campaign order. Identifiers are unique within the pack and each path is relative to the pack root, which defaults to the directory holding this manifest.",
+      "description": "Levels in campaign order. Identifiers are unique within the pack and each path is relative to the pack root, which defaults to the directory holding this manifest. The upper bound is a load bound rather than a game rule: every entry is a file the loader opens before it returns anything, so an unbounded list lets one small manifest ask for unbounded work. 256 sits far above the 35 stages of the classic campaign, so a real campaign never meets it.",
       "type": "array",
       "minItems": 1,
+      "maxItems": 256,
       "items": {
         "$ref": "#/$defs/levelEntry"
       }

@@ -14,12 +14,12 @@ from typing import Any
 import pytest
 from battle_city_content import ContentSchemaError, ContentValidationError, bundled_content_root
 from battle_city_content.loader import LEVEL_SCHEMA_FILENAME, PACK_SCHEMA_FILENAME
-from battle_city_content.schema import SUPPORTED_KEYWORDS, compile_schema
+from battle_city_content.schema import SUPPORTED_KEYWORDS, CompiledSchema, compile_schema
 
 DOCUMENT = Path("in-memory.json")
 
 
-def compiled(schema: dict[str, Any]) -> Any:
+def compiled(schema: dict[str, Any]) -> CompiledSchema:
     return compile_schema(schema, name="test.schema.json")
 
 
@@ -204,6 +204,69 @@ def test_a_local_reference_is_resolved() -> None:
     error = reject(schema, {"a": -1})
     assert error.field == "a"
     assert error.message == "must be at least 0, found -1"
+
+
+def test_a_trailing_dollar_anchors_the_end_of_the_string() -> None:
+    """``$`` in a schema means the end of the value, not "before a final newline".
+
+    Python's ``$`` matches at either position, and the validator applies patterns with
+    ``search``, so an identifier pattern that reads as if it forbade a newline would
+    otherwise accept one riding along at the end of the string.
+    """
+    schema = {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"}
+    accept(schema, "classic-01")
+    assert reject(schema, "classic-01\n").message == "must match ^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    assert reject(schema, "\nclassic-01").field == ""
+    assert reject(schema, "classic-01\nclassic-02").field == ""
+
+
+@pytest.mark.parametrize("value", ["aaa\n", "\naaa", "aaa\nbbb", "aaa\r\n", "aaa ", "aaa\x00"])
+def test_no_trailing_character_slips_past_an_end_anchor(value: str) -> None:
+    assert reject({"pattern": "^[a-z]+$"}, value).message == "must match ^[a-z]+$"
+
+
+def test_an_unanchored_pattern_still_matches_anywhere() -> None:
+    # JSON Schema specifies search semantics, and translating the end anchor must not
+    # quietly turn every pattern into a full match.
+    accept({"pattern": "b"}, "abc")
+    accept({"pattern": "b"}, "b\n")
+    assert reject({"pattern": "b"}, "acd").message == "must match b"
+
+
+def test_a_start_anchor_alone_is_left_alone() -> None:
+    accept({"pattern": "^ab"}, "abc")
+    assert reject({"pattern": "^ab"}, "xabc").message == "must match ^ab"
+
+
+@pytest.mark.parametrize("pattern", ["^a$|^b$", "^a$b", "^(a$)"])
+def test_a_dollar_before_the_end_is_refused_at_compile_time(pattern: str) -> None:
+    # Each of these carries the same before-a-final-newline looseness, and none has a
+    # translation that preserves what it was written to mean, so the schema is refused
+    # rather than compiled into something weaker than it reads.
+    with pytest.raises(ContentSchemaError) as caught:
+        compiled({"pattern": pattern})
+    assert "with '$' before its end" in str(caught.value)
+
+
+@pytest.mark.parametrize("pattern", [r"^\$[0-9]+$", "^[$][0-9]+$"])
+def test_a_literal_dollar_sign_is_not_an_anchor(pattern: str) -> None:
+    accept({"pattern": pattern}, "$25")
+    assert reject({"pattern": pattern}, "$25\n").field == ""
+
+
+def test_every_end_anchored_pattern_in_the_checked_in_schemas_rejects_a_newline() -> None:
+    """The schemas this package ships must not accept a trailing newline anywhere."""
+    seen = 0
+    for filename in (LEVEL_SCHEMA_FILENAME, PACK_SCHEMA_FILENAME):
+        path = bundled_content_root() / "schemas" / filename
+        schema = compile_schema(json.loads(path.read_text(encoding="utf-8")), name=filename)
+        for pattern, expression in schema.patterns.items():
+            if not pattern.endswith("$"):
+                continue
+            seen += 1
+            assert expression.pattern.endswith("\\Z")
+            assert expression.search("a\n") is None
+    assert seen > 0
 
 
 @pytest.mark.parametrize("filename", [LEVEL_SCHEMA_FILENAME, PACK_SCHEMA_FILENAME])

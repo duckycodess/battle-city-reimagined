@@ -215,6 +215,22 @@ def test_an_unsupported_content_schema_version_is_rejected(tmp_path: Path, versi
             "license.spdx_id",
         ),
         (lambda document: document.update(content_schema_version="1"), "content_schema_version"),
+        # A trailing newline used to satisfy a "$" anchor, so every end-anchored
+        # manifest field is pinned against one here.
+        (lambda document: document.update(id="synthetic\n"), "id"),
+        (lambda document: document.update(id="\nsynthetic"), "id"),
+        (lambda document: document.update(version="1.0.0\n"), "version"),
+        (lambda document: document.update(version="\n1.0.0"), "version"),
+        (lambda document: document["license"].update(spdx_id="MIT\n"), "license.spdx_id"),
+        (lambda document: document["levels"][0].update(id="synthetic-01\n"), "levels[0].id"),
+        (
+            lambda document: document["levels"][0].update(path="levels/synthetic-01.json\n"),
+            "levels[0].path",
+        ),
+        (
+            lambda document: document["levels"][0].update(path="\nlevels/synthetic-01.json"),
+            "levels[0].path",
+        ),
     ],
 )
 def test_a_malformed_manifest_names_its_field(tmp_path: Path, mutate: Any, field: str) -> None:
@@ -222,6 +238,38 @@ def test_a_malformed_manifest_names_its_field(tmp_path: Path, mutate: Any, field
     error = reject_pack(manifest, root=tmp_path)
     assert error.field == field
     assert error.path == manifest
+
+
+def test_a_level_path_with_a_trailing_newline_never_reaches_the_filesystem(
+    tmp_path: Path,
+) -> None:
+    """The schema rejects the path before the loader tries to open anything.
+
+    ``"levels/synthetic-01.json\n"`` matched the path pattern while ``$`` could match
+    before a final newline, and the loader would then have asked the filesystem for a
+    name no pack declares.
+    """
+    manifest = build_pack(
+        tmp_path,
+        manifest=mutated_manifest(
+            lambda document: document["levels"][0].update(path="levels/synthetic-01.json\n")
+        ),
+    )
+    error = reject_pack(manifest, root=tmp_path)
+    assert error.field == "levels[0].path"
+    assert error.path == manifest
+    assert "must match" in error.message
+
+
+def test_a_manifest_may_not_declare_more_levels_than_the_bound_allows(tmp_path: Path) -> None:
+    """The manifest is bounded so one small file cannot ask for unbounded file opens."""
+    entries = [
+        {"id": f"synthetic-{index:04d}", "path": f"levels/{index}.json"} for index in range(257)
+    ]
+    manifest = build_pack(tmp_path, manifest=synthetic_manifest(levels=entries))
+    error = reject_pack(manifest, root=tmp_path)
+    assert error.field == "levels"
+    assert error.message == "must have at most 256 item(s), found 257"
 
 
 def test_a_missing_manifest_is_reported(tmp_path: Path) -> None:
