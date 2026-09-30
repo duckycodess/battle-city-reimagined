@@ -480,7 +480,13 @@ def _blocked(frame: _Frame, tank_id: int, body: Rect) -> bool:
 
 
 def _phase_fire(frame: _Frame, tick_input: TickInput) -> None:
-    """Spawn at most one projectile per tank per tick."""
+    """Spawn at most one projectile per tank per tick.
+
+    A projectile created here is advanced by phase 7 in the same tick, matching the
+    historical order where firing preceded the bullet update. A tank that is both
+    auto-firing under gatling and holding an explicit fire command still produces one
+    projectile; the historical loop could produce two in a frame.
+    """
     requested = {
         command.tank_id for command in tick_input.commands if isinstance(command, FireCommand)
     }

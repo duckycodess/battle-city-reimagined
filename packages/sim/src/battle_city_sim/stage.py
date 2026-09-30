@@ -140,10 +140,12 @@ class Stage:
 
 
 def _require_free_spawn(grid: TileGrid, cell: GridPos, field: str) -> None:
-    """Reject a spawn that is off-grid or standing on terrain.
+    """Reject a spawn that is off-grid or standing on anything but empty ground.
 
-    The historical runtime raised on the same condition while populating blocks: a
-    non-empty tile on a spawn cell would trap the tank inside terrain from tick zero.
+    The historical runtime raised on the same condition while populating blocks. Blocking
+    terrain would trap a tank inside it from tick zero. Forest is traversable yet still
+    rejected, so a stage cannot start a tank already concealed; a stage that wants that
+    needs a content proposal saying what it means.
     """
     if not grid.contains(cell):
         raise StageValidationError(
