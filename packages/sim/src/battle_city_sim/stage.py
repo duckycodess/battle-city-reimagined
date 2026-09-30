@@ -93,6 +93,7 @@ class Stage:
         if not ordered_players:
             raise StageValidationError("spawns.players: must declare at least one spawn")
         seen_slots: set[int] = set()
+        seen_player_cells: set[tuple[int, int]] = set()
         for spawn in ordered_players:
             if spawn.slot < 1:
                 raise StageValidationError(
@@ -101,6 +102,16 @@ class Stage:
             if spawn.slot in seen_slots:
                 raise StageValidationError(f"spawns.players: duplicate slot {spawn.slot}")
             seen_slots.add(spawn.slot)
+            cell_key = (spawn.cell.x, spawn.cell.y)
+            if cell_key in seen_player_cells:
+                # Two slots on one cell start the run with two bodies exactly coincident.
+                # Movement tests a target rect against the other tank's current body, so
+                # neither could ever step off the other: the run would begin soft-locked.
+                raise StageValidationError(
+                    f"spawns.players[slot={spawn.slot}]: duplicate spawn at "
+                    f"({spawn.cell.x}, {spawn.cell.y})"
+                )
+            seen_player_cells.add(cell_key)
             _require_free_spawn(grid, spawn.cell, f"spawns.players[slot={spawn.slot}]")
 
         ordered_enemies = tuple(enemy_spawns)
@@ -116,8 +127,7 @@ class Stage:
             seen_cells.add(key)
             _require_free_spawn(grid, cell, f"spawns.enemies[{index}]")
 
-        player_cells = {(spawn.cell.x, spawn.cell.y) for spawn in ordered_players}
-        shared = sorted(player_cells & seen_cells)
+        shared = sorted(seen_player_cells & seen_cells)
         if shared:
             x, y = shared[0]
             raise StageValidationError(f"spawns: player and enemy spawns share cell ({x}, {y})")

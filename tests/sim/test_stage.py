@@ -5,13 +5,15 @@ from __future__ import annotations
 import pytest
 from battle_city_sim import (
     CLASSIC_GRID_SIZE,
+    Direction,
     GridPos,
+    MoveCommand,
     PlayerSpawn,
     Stage,
     StageValidationError,
     Tile,
 )
-from helpers import BASE_CELL, build_rows, make_stage
+from helpers import BASE_CELL, build_rows, make_stage, make_state, run
 
 
 def test_valid_stage_exposes_grid_spawns_and_base() -> None:
@@ -128,6 +130,31 @@ def test_duplicate_enemy_spawns_are_rejected() -> None:
         make_stage(enemy_cells=[GridPos(2, 1), GridPos(2, 1)])
 
 
+def test_duplicate_player_spawn_cells_are_rejected() -> None:
+    """Two slots on one cell would start the run with two tanks exactly coincident.
+
+    Movement tests a target rect against the other tank's current body, so coincident
+    tanks can never step apart. The stage has to be refused before the run begins.
+    """
+    with pytest.raises(StageValidationError, match=r"spawns.players\[slot=2\]: duplicate spawn"):
+        make_stage(
+            player_cells=[
+                PlayerSpawn(slot=1, cell=GridPos(8, 10)),
+                PlayerSpawn(slot=2, cell=GridPos(8, 10)),
+            ]
+        )
+
+
+def test_distinct_player_spawn_cells_are_accepted() -> None:
+    stage = make_stage(
+        player_cells=[
+            PlayerSpawn(slot=1, cell=GridPos(8, 10)),
+            PlayerSpawn(slot=2, cell=GridPos(6, 10)),
+        ]
+    )
+    assert [spawn.cell for spawn in stage.player_spawns] == [GridPos(8, 10), GridPos(6, 10)]
+
+
 def test_player_and_enemy_spawns_may_not_share_a_cell() -> None:
     with pytest.raises(StageValidationError, match="share cell \\(8, 10\\)"):
         make_stage(enemy_cells=[GridPos(8, 10)])
@@ -138,3 +165,23 @@ def test_stage_requires_at_least_one_spawn_of_each_kind() -> None:
         make_stage(player_cells=[])
     with pytest.raises(StageValidationError, match="spawns.enemies"):
         make_stage(enemy_cells=[])
+
+
+def test_two_slots_on_distinct_cells_can_actually_separate() -> None:
+    """The counterpart to the duplicate-cell rejection: legal spawns are not stuck."""
+    stage = make_stage(
+        player_cells=[
+            PlayerSpawn(slot=1, cell=GridPos(8, 10)),
+            PlayerSpawn(slot=2, cell=GridPos(6, 10)),
+        ]
+    )
+    state, _ = run(
+        make_state(stage),
+        4,
+        commands=dict.fromkeys(
+            range(4),
+            [MoveCommand(1, Direction.RIGHT), MoveCommand(2, Direction.LEFT)],
+        ),
+    )
+    assert state.tank(1).position.x == 136
+    assert state.tank(2).position.x == 88

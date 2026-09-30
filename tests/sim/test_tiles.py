@@ -107,3 +107,35 @@ def test_direction_deltas_point_the_expected_way() -> None:
     assert Direction.LEFT.delta == (-1, 0)
     assert Direction.RIGHT.delta == (1, 0)
     assert Direction.RIGHT.scaled(3) == (3, 0)
+
+
+def test_only_ascii_tile_codes_are_accepted() -> None:
+    from battle_city_sim.tiles import TILE_BY_CHAR
+
+    assert set(TILE_BY_CHAR) == set("012345678")
+    assert all(character.isascii() for character in TILE_BY_CHAR)
+
+
+@pytest.mark.parametrize(
+    ("code", "label"),
+    [
+        ("٣", "arabic-indic three"),
+        ("²", "superscript two"),
+        ("０", "fullwidth zero"),
+        ("9", "out-of-range ascii digit"),
+        ("a", "letter"),
+        (" ", "space"),
+    ],
+    ids=lambda value: value if isinstance(value, str) and value.isascii() else "nonascii",
+)
+def test_a_non_tile_character_raises_a_stage_validation_error(code: str, label: str) -> None:
+    """A Unicode digit is not a tile code, and no bare ValueError may escape.
+
+    ``str.isdigit()`` accepts U+0663 and friends, and ``int()`` then either mislabels the
+    cell or raises a plain ``ValueError`` that names neither the field nor the coordinate.
+    """
+    from battle_city_sim import StageValidationError
+
+    rows = ["000", "0" + code + "0", "000"]
+    with pytest.raises(StageValidationError, match=r"grid.rows\[1\]\[1\]: unknown tile code"):
+        TileGrid.from_rows(rows)

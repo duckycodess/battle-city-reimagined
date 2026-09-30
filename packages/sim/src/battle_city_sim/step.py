@@ -15,7 +15,8 @@ changing it changes replays, so it needs a proposal.
    tick, so a rejected input never lands half-applied.
 2. **Spawn** enemies and powerups from explicit commands, in submitted order.
 3. **Expire** gatling and invincibility timers, in ascending tank order.
-4. **Respawn** player slots that asked for it.
+4. **Respawn** player slots that asked for it, onto a spawn cell phase 1 already
+   proved free of tanks.
 5. **Move** tanks, in ascending tank order.
 6. **Fire**, in ascending tank order: at most one projectile per tank per tick.
 7. **Advance** every projectile exactly once by ``rules.projectile_speed``.
@@ -280,6 +281,7 @@ def _validate(state: SimulationState, tick_input: TickInput, rules: Rules) -> No
     fired: set[int] = set()
     respawning: set[int] = set()
     despawning: set[int] = set()
+    respawn_requests: list[tuple[str, int, Rect]] = []
 
     for index, command in enumerate(tick_input.commands):
         field = f"commands[{index}]"
@@ -297,6 +299,7 @@ def _validate(state: SimulationState, tick_input: TickInput, rules: Rules) -> No
                 if not player.awaiting_respawn:
                     raise InvalidInputError(f"{field}: slot {slot} is not waiting to respawn")
                 _require_unique(field, "respawn", slot, respawning)
+                respawn_requests.append((field, slot, _cell_body(player.spawn, rules)))
             case SpawnEnemyCommand(cell=cell, variant=variant):
                 if variant not in ENEMY_VARIANTS:
                     raise InvalidInputError(f"{field}: {variant.name} is not an enemy variant")
@@ -323,6 +326,30 @@ def _validate(state: SimulationState, tick_input: TickInput, rules: Rules) -> No
                 _require_unique(field, "despawn", powerup_id, despawning)
             case _:
                 raise InvalidInputError(f"{field}: unsupported command {command!r}")
+
+    _validate_respawns(respawn_requests, occupied_bodies)
+
+
+def _validate_respawns(requests: list[tuple[str, int, Rect]], occupied_bodies: list[Rect]) -> None:
+    """Refuse a respawn whose spawn cell is occupied.
+
+    A respawning tank is placed at its stage spawn, so an occupied spawn would drop two
+    bodies onto the same pixels. Movement tests a target rect against the other tank's
+    current body, so exactly coincident tanks can never step apart: the run would be
+    silently and permanently stuck. Refusing the tick instead keeps the slot in
+    ``awaiting_respawn``, which is an explicit, inspectable deferral the caller can retry
+    once the cell clears.
+
+    Requests are checked in ascending slot order and against every enemy spawned in the
+    same tick, so the verdict does not depend on where the commands sat in the tick input.
+    """
+    for field, slot, body in sorted(requests, key=lambda request: request[1]):
+        for other in occupied_bodies:
+            if body.overlaps(other):
+                raise InvalidInputError(
+                    f"{field}: slot {slot} cannot respawn while its spawn cell is occupied"
+                )
+        occupied_bodies.append(body)
 
 
 def _require_known_tank(field: str, tank_id: int, known: set[int]) -> None:
@@ -410,7 +437,11 @@ def _phase_expire_powerups(frame: _Frame) -> None:
 
 
 def _phase_respawn(frame: _Frame, tick_input: TickInput) -> None:
-    """Return requested slots to their spawn cell with effects cleared."""
+    """Return requested slots to their spawn cell with effects cleared.
+
+    Validation has already refused any request whose spawn cell is occupied, so this
+    never stacks two tanks on one spot. See :func:`_validate_respawns`.
+    """
     requested = {
         command.slot for command in tick_input.commands if isinstance(command, RespawnCommand)
     }

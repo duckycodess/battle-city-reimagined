@@ -34,6 +34,20 @@ class Tile(Enum):
 
 
 TILE_BY_CODE: Final[dict[int, Tile]] = {tile.value: tile for tile in Tile}
+"""Integer-keyed tile lookup, for callers that already hold a numeric tile code.
+
+Row parsing uses :data:`TILE_BY_CHAR` instead, because a character is not an integer and
+converting one to reach this table is what let non-ASCII digits through.
+"""
+
+TILE_BY_CHAR: Final[dict[str, Tile]] = {str(tile.value): tile for tile in Tile}
+"""The ASCII characters a level row may contain, mapped to their tile.
+
+Membership in this table is the whole acceptance rule for a tile code. Testing
+``str.isdigit()`` instead would admit non-ASCII digits such as U+0663 and would let a
+character like U+00B2 escape as a bare ``ValueError`` from ``int()``, which is neither a
+:class:`StageValidationError` nor a message naming the offending coordinate.
+"""
 
 TILES_BLOCKING_TANKS: Final[frozenset[Tile]] = frozenset(
     {
@@ -109,7 +123,8 @@ class TileGrid:
     def from_rows(cls, rows: Sequence[str]) -> TileGrid:
         """Build a grid from tile-code strings, one string per row.
 
-        Raises :class:`StageValidationError` for a ragged grid or an unknown tile code.
+        Only the ASCII characters ``"0"``-``"8"`` are tile codes. Raises
+        :class:`StageValidationError` for a ragged grid or any other character.
         """
         if not rows:
             raise StageValidationError("grid.rows: must declare at least one row")
@@ -124,9 +139,10 @@ class TileGrid:
                 )
             cells: list[Tile] = []
             for x, code in enumerate(row):
-                if not code.isdigit() or int(code) not in TILE_BY_CODE:
+                tile = TILE_BY_CHAR.get(code)
+                if tile is None:
                     raise StageValidationError(f"grid.rows[{y}][{x}]: unknown tile code {code!r}")
-                cells.append(TILE_BY_CODE[int(code)])
+                cells.append(tile)
             parsed.append(tuple(cells))
         return cls(width=width, height=len(parsed), rows=tuple(parsed))
 

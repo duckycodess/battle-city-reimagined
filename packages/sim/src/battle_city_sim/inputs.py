@@ -52,7 +52,13 @@ class FireCommand:
 
 @dataclass(frozen=True, slots=True)
 class RespawnCommand:
-    """Return a slot's tank to its spawn after a life was lost."""
+    """Return a slot's tank to its spawn after a life was lost.
+
+    Rejected when the slot is not waiting to respawn, or when its spawn cell is occupied
+    by a live tank, including one spawned earlier in the same tick. The slot then stays in
+    ``awaiting_respawn`` and the caller may retry on a later tick; placing a tank inside
+    another one would lock both in place permanently.
+    """
 
     slot: int
 
