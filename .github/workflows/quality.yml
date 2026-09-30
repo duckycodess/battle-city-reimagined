@@ -1,0 +1,31 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install workspace
+        run: uv sync --locked --all-packages --all-groups
+      - name: Check formatting
+        run: uv run --locked ruff format --check packages tests tools
+      - name: Lint
+        run: uv run --locked ruff check packages tests tools
+      - name: Type check
+        run: uv run --locked mypy packages tests
+      - name: Test
+        run: uv run --locked pytest

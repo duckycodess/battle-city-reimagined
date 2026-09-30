@@ -1,0 +1,10 @@
+[project]
+name = "battle-city-protocol"
+version = "0.1.0"
+description = "Versioned transport-neutral messages for Battle City sessions."
+requires-python = ">=3.14"
+dependencies = []
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"

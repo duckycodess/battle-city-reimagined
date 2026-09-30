@@ -1,0 +1,56 @@
+name: Implementation task
+description: Bounded work item with explicit scope and acceptance evidence.
+title: "[area] "
+body:
+  - type: markdown
+    attributes:
+      value: "Issue creation does not authorize automation. The owner applies exact agent:ready after reviewing scope and dependencies."
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One observable outcome.
+    validations:
+      required: true
+  - type: textarea
+    id: allowed-files
+    attributes:
+      label: Allowed files
+      description: Exact package paths or files this issue may change. Name shared-contract owners.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Use GitHub issue references, one per line, under this heading.
+    validations:
+      required: true
+  - type: textarea
+    id: inputs
+    attributes:
+      label: Inputs
+      description: Specs, data, decisions, and existing behavior to preserve.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance commands
+      description: Exact commands and behavior checks.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots where relevant
+      description: Say what visual states need evidence, or state not applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Remaining risks
+      description: Known limits, unresolved choices, and risks to report.
+    validations:
+      required: true

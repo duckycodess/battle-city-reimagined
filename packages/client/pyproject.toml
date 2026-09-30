@@ -1,0 +1,20 @@
+[project]
+name = "battle-city-client"
+version = "0.1.0"
+description = "Pygame-CE client, presentation, input, and audio."
+requires-python = ">=3.14"
+dependencies = [
+  "battle-city-content",
+  "battle-city-protocol",
+  "battle-city-sim",
+  "pygame-ce>=2.5.8,<3",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+battle-city-content = { workspace = true }
+battle-city-protocol = { workspace = true }
+battle-city-sim = { workspace = true }

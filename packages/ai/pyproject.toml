@@ -1,0 +1,13 @@
+[project]
+name = "battle-city-ai"
+version = "0.1.0"
+description = "Seeded bot policies that emit simulation inputs."
+requires-python = ">=3.14"
+dependencies = ["battle-city-sim"]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+battle-city-sim = { workspace = true }
