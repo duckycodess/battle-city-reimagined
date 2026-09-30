@@ -14,6 +14,8 @@ Deliberate restrictions
   closed, so an unknown field is an error rather than ignored data.
 * ``type: "integer"`` accepts only a JSON integer. ``true`` is not an integer even though
   Python says ``isinstance(True, int)``, and ``1.0`` is rejected rather than coerced.
+* ``const`` and ``enum`` compare the same way: ``1``, ``1.0`` and ``true`` are three
+  different values here, where JSON Schema would call the first two equal.
 """
 
 from __future__ import annotations
@@ -31,10 +33,12 @@ _ANNOTATION_KEYWORDS: Final[frozenset[str]] = frozenset(
     {"$schema", "$id", "$comment", "title", "description"}
 )
 
+_CONTAINER_KEYWORDS: Final[frozenset[str]] = frozenset({"$defs"})
+"""Keywords that hold other schemas rather than asserting anything about an instance."""
+
 _ASSERTION_KEYWORDS: Final[frozenset[str]] = frozenset(
     {
         "$ref",
-        "$defs",
         "type",
         "const",
         "enum",
@@ -52,7 +56,9 @@ _ASSERTION_KEYWORDS: Final[frozenset[str]] = frozenset(
     }
 )
 
-SUPPORTED_KEYWORDS: Final[frozenset[str]] = _ANNOTATION_KEYWORDS | _ASSERTION_KEYWORDS
+SUPPORTED_KEYWORDS: Final[frozenset[str]] = (
+    _ANNOTATION_KEYWORDS | _ASSERTION_KEYWORDS | _CONTAINER_KEYWORDS
+)
 """Every keyword a checked-in content schema may use."""
 
 _JSON_TYPE_NAMES: Final[frozenset[str]] = frozenset(
@@ -229,7 +235,7 @@ def _compile_node(
         target = reference[len(_LOCAL_REF_PREFIX) :]
         if target not in defs:
             raise ContentSchemaError(f"{name}: {location} references unknown $defs/{target}")
-        siblings = sorted(set(node) & _ASSERTION_KEYWORDS - {"$ref"})
+        siblings = sorted(set(node) & (_ASSERTION_KEYWORDS - {"$ref"}))
         if siblings:
             # The validator follows the reference and returns, so a sibling assertion
             # would be silently dropped. Reject it instead of validating less than the
@@ -328,8 +334,16 @@ def _article(type_name: str) -> str:
 
 
 def _json_equal(left: JsonValue, right: JsonValue) -> bool:
-    """Compare two JSON values without Python's ``True == 1`` equivalence."""
+    """Compare two JSON values without Python's ``True == 1`` or ``1.0 == 1`` equivalence.
+
+    JSON Schema calls ``1`` and ``1.0`` equal numbers. This validator does not, for the
+    same reason ``type: "integer"`` rejects ``1.0``: a version field that decodes to a
+    float is not the integer the loader is about to read, and accepting it here turns a
+    content error into an internal one further down.
+    """
     if isinstance(left, bool) != isinstance(right, bool):
+        return False
+    if isinstance(left, float) != isinstance(right, float):
         return False
     if isinstance(left, list) and isinstance(right, list):
         return len(left) == len(right) and all(
