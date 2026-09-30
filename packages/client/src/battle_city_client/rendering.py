@@ -314,7 +314,7 @@ class Renderer:
             ("LIVES", str(session.player.lives), theme.TEXT),
             (
                 "TANK",
-                "UP" if tank is not None else "DOWN",
+                "ALIVE" if tank is not None else "LOST",
                 theme.TEXT if tank is not None else theme.DANGER,
             ),
             ("GATLING", str(tank.gatling_ticks if tank else 0), theme.TEXT),
