@@ -3,7 +3,8 @@
 ## Product and architecture
 
 - Read relevant specs in openspec/specs/ and the complete linked GitHub issue before editing.
-- Implement only the issue's goal and allowed files. If acceptance criteria conflict with a spec, stop and report the conflict; do not silently redefine the contract.
+- Implement only the issue's goal and allowed files. Never silently redefine a contract: state every behavior or contract change in the pull request, and on the issue when the issue's own acceptance criteria changed.
+- When acceptance criteria and a spec disagree, reconcile them inside the issue's goal, the accepted specs, and the allowed files by taking the most conservative reversible option, and record the choice and its rationale. Where a spec reserves a decision to an accepted change proposal — gameplay rules, scoring, wave pacing, win-state timing, score and life rebalance, canonical serialization — that reservation stands: keep the recorded contract, narrow this issue, and raise a proposal or an unlabelled follow-up issue instead of deciding it here.
 - Keep packages/sim headless, deterministic, and independent of pygame, network, file, clock, and process APIs. Simulation advances only through explicit fixed-tick inputs.
 - Client renders state and translates input. Server owns authoritative multiplayer state. AI emits legal simulation inputs. Content is declarative data validated by schemas.
 - Preserve the classic 16×16 stages and tile behavior recorded in the product and content specs. New mechanics need explicit rules and tests.
@@ -17,7 +18,9 @@
 - Work on one bounded issue per branch and pull request. Do not include unrelated work.
 - Do not invoke ccmux. Use the configured Pi/Herdr workflow and Codiv/OpenJev router when dispatched.
 - The dispatcher may merge only after its merge-ready report, required checks, independent review where required, dependency completion, and exact-head checks all pass. Do not bypass those gates or manually merge a pull request.
-- If you discover work outside current issue scope, open an unlabelled follow-up issue. Ask through the GitHub issue when product intent is genuinely missing; dispatcher must move it to needs-human.
+- An issue carrying the exact label agent:ready is the owner delegating that issue's ordinary design, implementation, and spec-reconciliation decisions to you, and the delegation survives the dispatcher's transition to agent:running. Choose the conservative, reversible option that fits the goal, the accepted specs, and the allowed files, document the choice and why in the pull request — and on the issue when acceptance criteria changed — and continue. Do not ask the owner to pick among ordinary alternatives. The delegation covers that one issue; it never authorizes a new issue, a label, or an edit outside the allowed files.
+- If you discover work outside current issue scope, narrow this issue to its in-scope part and open an unlabelled follow-up issue for the rest.
+- Escalate only when narrowing leaves no coherent in-scope option, or when the work needs authority, credentials, or permissions beyond that delegation — including a decision the specs reserve to an accepted proposal, or genuinely missing product intent. Ask through the GitHub issue; dispatcher must move it to needs-human. Ordinary ambiguity or resolvable issue/spec tension is not an escalation.
 
 ## Shared contracts and dependencies
 
