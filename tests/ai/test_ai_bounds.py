@@ -14,6 +14,7 @@ from collections.abc import Mapping
 import battle_city_ai.perception as perception
 import battle_city_ai.policy as policy
 import pytest
+from ai_helpers import PLAYER_TANK_ID, arena, bots_for, drive, game, with_enemy
 from battle_city_ai import (
     PROFILE_ORDER,
     VETERAN,
@@ -36,7 +37,6 @@ from battle_city_sim import (
     state_hash,
     step,
 )
-from conftest import PLAYER_TANK_ID, arena, bots_for, drive, game, with_enemy
 
 ENEMY_TANK_ID = 2
 

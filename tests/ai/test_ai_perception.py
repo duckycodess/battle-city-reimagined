@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 
 import pytest
+from ai_helpers import PLAYER_TANK_ID, arena, game, with_enemy
 from battle_city_ai import (
     SOLDIER,
     aim_candidates,
@@ -33,7 +34,6 @@ from battle_city_sim import (
     step,
 )
 from battle_city_sim.inputs import TickInput
-from conftest import PLAYER_TANK_ID, arena, game, with_enemy
 
 ENEMY_TANK_ID = 2
 """The first enemy spawned into a one-slot stage takes identifier 2."""

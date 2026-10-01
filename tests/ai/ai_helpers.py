@@ -1,11 +1,13 @@
 """Builders for the bot regression tests.
 
-These live in ``conftest.py`` rather than a ``helpers`` module on purpose. ``tests/`` has
-no package markers, so pytest imports every test module under its bare basename and two
-same-named files anywhere in the tree collide at import time. ``conftest.py`` is the one
-filename pytest resolves per directory, so a sibling suite can add its own without
-clashing with this one. For the same reason every module in this directory is named
-``test_ai_*``.
+The name is package-qualified on purpose. ``tests/`` has no package markers, so pytest
+imports every module under its bare basename and mypy names it the same way; two
+same-named files anywhere in the tree then collide, at import time for pytest and as a
+duplicate module for ``mypy packages tests``. ``conftest.py`` would have been exempt from
+the first collision but not the second, and the sibling suites already carry their own
+``conftest.py``. So this file takes a prefix nothing else can claim, matching
+``client_helpers`` and ``content_helpers``. For the same reason every module in this
+directory is named ``test_ai_*``.
 
 Stages are built here instead of loaded from the content package: a bot test should fail
 because a decision changed, not because somebody edited a shipped level.

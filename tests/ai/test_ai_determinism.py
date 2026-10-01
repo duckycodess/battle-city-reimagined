@@ -12,6 +12,7 @@ import dataclasses
 from collections.abc import Sequence
 
 import pytest
+from ai_helpers import PLAYER_TANK_ID, arena, bots_for, drive, game, with_enemy
 from battle_city_ai import (
     PROFILE_ORDER,
     ROOKIE,
@@ -24,7 +25,6 @@ from battle_city_ai import (
     seed_from_state,
 )
 from battle_city_sim import GridPos, SimulationState, TickInput, Tile, run_ticks, state_hash
-from conftest import PLAYER_TANK_ID, arena, bots_for, drive, game, with_enemy
 
 ENEMY_TANK_ID = 2
 

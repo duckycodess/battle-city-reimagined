@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 
 import pytest
+from ai_helpers import PLAYER_TANK_ID, game, with_enemy
 from battle_city_ai import (
     ROOKIE,
     VETERAN,
@@ -44,10 +45,13 @@ from battle_city_sim import (
     Vec2,
     step,
 )
-from conftest import PLAYER_TANK_ID, game, with_enemy
 
 ORPHAN_PROJECTILE_ID = 50
 ORPHAN_OWNER_ID = 99
+
+CERTAIN_MISS = 100
+"""A ``miss_chance_percent`` no accuracy draw can clear: ``rng.below(100)`` yields 0..99,
+so ``roll >= 100`` is false for every seed and the decline is a fact, not a coin flip."""
 
 
 def _under_fire(start_x: int = 71) -> SimulationState:
@@ -219,17 +223,24 @@ def _gated_by_allowance(state: SimulationState, bot: Bot) -> tuple[SimulationSta
     return crowded, bot
 
 
+def _gated_by_accuracy(state: SimulationState, bot: Bot) -> tuple[SimulationState, Bot]:
+    missing: DifficultyProfile = replace(bot.profile, miss_chance_percent=CERTAIN_MISS)
+    return state, replace(bot, profile=missing)
+
+
 @pytest.mark.parametrize(
     "gate",
-    [_gated_by_cooldown, _gated_by_reaction, _gated_by_allowance],
-    ids=["cooldown", "reaction-delay", "projectile-allowance"],
+    [_gated_by_cooldown, _gated_by_reaction, _gated_by_allowance, _gated_by_accuracy],
+    ids=["cooldown", "reaction-delay", "projectile-allowance", "accuracy-decline"],
 )
 def test_an_aim_that_cannot_fire_this_tick_does_not_suppress_the_dodge(
     gate: object,
 ) -> None:
-    # The precedence is "a shot the bot can take outranks a dodge", not "an aim outranks a
-    # dodge". Each gate here leaves the bot perfectly lined up and completely unable to
-    # shoot, so standing in the projectile's path buys it nothing at all.
+    # The precedence is "a shot the bot is firing outranks a dodge", not "an aim outranks
+    # a dodge". Each gate here leaves the bot perfectly lined up and emitting no shot, so
+    # standing in the projectile's path buys it nothing at all. The accuracy decline is a
+    # gate like the other three: the draw is spent and the cooldown restarts either way,
+    # but no projectile leaves the muzzle, so there is no line of fire left to protect.
     base = _aligned_and_under_fire()
     eager: DifficultyProfile = replace(VETERAN, name="veteran-gated", reaction_delay_ticks=0)
     state, bot = gate(  # type: ignore[operator]
@@ -263,3 +274,97 @@ def test_an_aim_that_cannot_fire_still_holds_its_line_when_there_is_nothing_to_d
     for command in decision.commands:
         assert isinstance(command, MoveCommand)
         assert command.direction is Direction.RIGHT
+
+
+INVINCIBILITY_SWEEP = range(2, 9)
+"""Timers the pass-through tests sweep, covering the shot's whole stay inside the body
+and a little past it, so one sweep sees the tank die and sees it survive."""
+
+
+def _point_blank(invincible_ticks: int) -> SimulationState:
+    """Return a state whose invincible player tank already has a shot entering its body.
+
+    The projectile starts 2px off the tank's right edge, so it overlaps on the very first
+    traced tick and stays inside the 16px body for several more. That window is the whole
+    point: ``step._phase_projectile_vs_tank`` skips an invincible tank without consuming
+    the shot, so the timer can expire while the projectile is still inside the body.
+    """
+    state = _under_fire(start_x=50)
+    tanks = tuple(
+        replace(tank, invincible_ticks=invincible_ticks)
+        if tank.entity_id == PLAYER_TANK_ID
+        else tank
+        for tank in state.tanks
+    )
+    return replace(state, tanks=tanks)
+
+
+def _survives_unaided(state: SimulationState, direction: Direction | None, ticks: int) -> bool:
+    """Step ``ticks`` ticks holding ``direction`` with no bot, and report survival.
+
+    The arbiter for the prediction tests: whatever the real engine does to this tank is
+    the answer perception has to produce.
+    """
+    current = state
+    commands: tuple[Command, ...] = (
+        () if direction is None else (MoveCommand(tank_id=PLAYER_TANK_ID, direction=direction),)
+    )
+    for _ in range(ticks):
+        result = step(current, TickInput.from_iterable(current.tick, commands))
+        current = result.state
+        if any(isinstance(event, TankDestroyed) for event in result.events):
+            return False
+    return True
+
+
+def test_an_overlap_while_invincible_does_not_end_the_trace() -> None:
+    # The regression, stated on its own. The shot is already inside the body on tick one,
+    # when the tank cannot be hurt. Reading that first overlap as the answer reports the
+    # tank safe for the whole flight, when the engine in fact kills it three ticks later.
+    state = _point_blank(3)
+    threat = state.projectiles[0]
+    tank = state.tank(PLAYER_TANK_ID)
+
+    assert projectile_reaches(state, threat, tank, 1) is False
+    assert projectile_reaches(state, threat, tank, VETERAN.planning_horizon_ticks) is True
+    assert not _survives_unaided(state, None, VETERAN.planning_horizon_ticks)
+
+
+@pytest.mark.parametrize("invincible_ticks", list(INVINCIBILITY_SWEEP))
+def test_the_standing_trace_agrees_with_the_engine_about_an_invincible_body(
+    invincible_ticks: int,
+) -> None:
+    state = _point_blank(invincible_ticks)
+    horizon = VETERAN.planning_horizon_ticks
+    predicted = projectile_reaches(state, state.projectiles[0], state.tank(PLAYER_TANK_ID), horizon)
+    assert predicted is not _survives_unaided(state, None, horizon)
+
+
+@pytest.mark.parametrize("invincible_ticks", list(INVINCIBILITY_SWEEP))
+def test_the_escape_trace_agrees_with_the_engine_about_an_invincible_body(
+    invincible_ticks: int,
+) -> None:
+    # The same sweep for the moving walk, where the tank is also climbing out of the line:
+    # a short timer dies inside the body, a long one outlives the shot's stay in it.
+    state = _point_blank(invincible_ticks)
+    horizon = VETERAN.planning_horizon_ticks
+    predicted = projectile_reaches_moving(
+        state, state.projectiles[0], state.tank(PLAYER_TANK_ID), Direction.UP, horizon
+    )
+    assert predicted is not _survives_unaided(state, Direction.UP, horizon)
+
+
+def test_the_invincibility_sweep_really_sees_both_answers() -> None:
+    # Guards the two sweeps above. Both would pass on a predicate that answered the same
+    # way every time, so the window is pinned here rather than left to drift into one.
+    horizon = VETERAN.planning_horizon_ticks
+    standing: set[bool] = set()
+    escaping: set[bool] = set()
+    for invincible_ticks in INVINCIBILITY_SWEEP:
+        state = _point_blank(invincible_ticks)
+        threat = state.projectiles[0]
+        tank = state.tank(PLAYER_TANK_ID)
+        standing.add(projectile_reaches(state, threat, tank, horizon))
+        escaping.add(projectile_reaches_moving(state, threat, tank, Direction.UP, horizon))
+    assert standing == {True, False}
+    assert escaping == {True, False}

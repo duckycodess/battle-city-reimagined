@@ -44,11 +44,13 @@ stay at the same stream position. A declined accuracy draw still spends the shot
 
 What outranks what
 ------------------
-A shot the bot can actually take this tick outranks everything, including a dodge. Every
+A shot the bot is actually firing this tick outranks everything, including a dodge. Every
 other case lets the dodge act: being lined up on a target is not a reason to stand in a
-projectile's path while a cooldown, a reaction gate or the engine's projectile allowance
-makes the shot impossible anyway. With no dodge to make, an aim that is merely waiting on
-one of those gates still holds its facing rather than wandering off and losing it.
+projectile's path while a cooldown, a reaction gate, the engine's projectile allowance or
+the bot's own accuracy draw means no projectile leaves the muzzle anyway. A declined
+accuracy draw is one of those cases, which is why it is rolled before the dodge is
+considered and not after. With no dodge to make, an aim that is merely waiting on one of
+those gates still holds its facing rather than wandering off and losing it.
 
 Deliberately absent
 -------------------
@@ -244,8 +246,20 @@ def decide(
         and _shot_is_available(state, tank, rules)
     )
 
+    fire = False
     if shot_is_ready:
-        # A shot the bot can take this tick outranks the roaming plan and outranks
+        roll, rng = rng.below(PERCENT)
+        fire = roll >= profile.miss_chance_percent
+        # Spent either way. A declined shot that left the cooldown untouched would be
+        # re-rolled on the very next tick, which costs a tick instead of an opportunity
+        # and makes the knob almost inert; see ``miss_chance_percent``.
+        ticks_since_fire = 0
+
+    # The accuracy draw is settled before the dodge is, because only a shot that is
+    # actually going out is worth standing in a projectile's path for. A declined one
+    # buys the bot nothing, so it falls through to the dodge like any other gated tick.
+    if fire:
+        # A shot the bot is taking this tick outranks the roaming plan and outranks
         # dodging: it does not step out of a line of fire it is about to use.
         plan_direction = None
     else:
@@ -264,15 +278,6 @@ def decide(
             if plan_direction is None:
                 plan_direction = _roam_direction(state, tank, target, profile, rules)
             move = plan_direction
-
-    fire = False
-    if shot_is_ready:
-        roll, rng = rng.below(PERCENT)
-        fire = roll >= profile.miss_chance_percent
-        # Spent either way. A declined shot that left the cooldown untouched would be
-        # re-rolled on the very next tick, which costs a tick instead of an opportunity
-        # and makes the knob almost inert; see ``miss_chance_percent``.
-        ticks_since_fire = 0
 
     commands: list[Command] = []
     if move is not None:

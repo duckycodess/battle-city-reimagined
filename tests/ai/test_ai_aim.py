@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pytest
+from ai_helpers import PLAYER_TANK_ID, game, with_enemy
 from battle_city_ai import (
     MAX_HITTING_OFFSET_PX,
     PROFILE_ORDER,
@@ -36,7 +37,6 @@ from battle_city_sim import (
     TickInput,
     step,
 )
-from conftest import PLAYER_TANK_ID, game, with_enemy
 
 ENEMY_TANK_ID = 2
 

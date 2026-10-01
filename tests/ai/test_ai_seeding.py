@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 
+from ai_helpers import arena, bots_for, drive, game, with_enemy
 from battle_city_ai import (
     PROFILE_ORDER,
     ROOKIE,
@@ -17,7 +18,6 @@ from battle_city_ai import (
     profile_code,
 )
 from battle_city_sim import Direction, GridPos, Rng, Tile
-from conftest import arena, bots_for, drive, game, with_enemy
 
 
 def test_derivation_is_a_pure_function_of_its_three_inputs() -> None:

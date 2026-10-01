@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 import pytest
+from ai_helpers import PLAYER_TANK_ID, Session, arena, bots_for, drive, game, with_enemy
 from battle_city_ai import (
     PROFILE_ORDER,
     ROOKIE,
@@ -39,7 +40,6 @@ from battle_city_sim import (
     Tile,
     step,
 )
-from conftest import PLAYER_TANK_ID, Session, arena, bots_for, drive, game, with_enemy
 
 ENEMY_TANK_ID = 2
 

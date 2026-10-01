@@ -302,6 +302,12 @@ def projectile_reaches(
     this answers "am I in the line as I stand now?". A bot evaluating an escape asks
     :func:`projectile_reaches_moving` instead, because standing still is not what it is
     about to do.
+
+    An overlap while the tank is still invincible does not end the walk. The engine's
+    ``_phase_projectile_vs_tank`` skips an invincible tank and leaves the projectile in
+    flight, and ``_phase_expire_powerups`` runs first on every later tick, so the same
+    projectile can be deep inside the same body when the timer reaches zero and kill it
+    there. Stopping at the first overlap would report that tank as safe.
     """
     width, height = state.world_size(rules)
     span = 2 * rules.projectile_radius + 1
@@ -321,8 +327,8 @@ def projectile_reaches(
             span,
             span,
         )
-        if body.overlaps(target):
-            return tank.invincible_ticks <= elapsed
+        if body.overlaps(target) and tank.invincible_ticks <= elapsed:
+            return True
     return False
 
 
@@ -341,7 +347,8 @@ def projectile_reaches_moving(
     that is struck part-way through its run and never reaches that final pose at all. So
     both move together, one tick at a time, in the engine's own phase order - tanks move
     (``step._phase_move``) before projectiles advance and resolve against them - and the
-    first overlap ends the walk.
+    first overlap that would actually land ends the walk. An overlap the tank is still
+    invincible for does not; see :func:`projectile_reaches`.
 
     The run stops advancing the tank once its path is refused, which is what makes this
     the full answer rather than :func:`clearance_ticks` plus a guess: a tank that runs
@@ -366,6 +373,6 @@ def projectile_reaches_moving(
             span,
             span,
         )
-        if body.overlaps(pose.body(rules)):
-            return tank.invincible_ticks <= elapsed
+        if body.overlaps(pose.body(rules)) and tank.invincible_ticks <= elapsed:
+            return True
     return False
