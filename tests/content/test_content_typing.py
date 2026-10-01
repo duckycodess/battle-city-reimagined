@@ -2,8 +2,9 @@
 
 Nothing in the source imports ``py.typed``, so losing it breaks no other test while
 silently untyping the content package for every package that imports it from an install.
-The wheel is built from an explicit include list, so the marker is also the kind of file
-a manifest edit can drop without any other failure.
+This reads the marker through the import system, so it guards the file in the source
+tree, not its presence in any built artifact; packaging is a separate concern, checked
+at build time against the manifest its own shared-contract issue owns.
 """
 
 from __future__ import annotations
