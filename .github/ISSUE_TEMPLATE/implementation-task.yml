@@ -4,7 +4,17 @@ title: "[area] "
 body:
   - type: markdown
     attributes:
-      value: "Issue creation does not authorize automation. The owner applies exact agent:ready after reviewing scope and dependencies."
+      value: |
+        Issue creation does not authorize automation. This form applies no labels. The owner
+        applies exact agent:ready after reviewing scope and dependencies.
+
+        Once an issue carries exact agent:ready, the assigned agent owns that issue's ordinary
+        design, implementation, and spec-reconciliation decisions: it takes the conservative,
+        reversible option that fits the goal, the accepted specs, and the allowed files below,
+        records the choice and its rationale, and continues without asking the owner to pick
+        among ordinary alternatives. It escalates to agent:needs-human only when narrowing
+        scope leaves no coherent in-scope option, or when the work needs authority,
+        credentials, or permissions beyond that delegation.
   - type: textarea
     id: goal
     attributes:
