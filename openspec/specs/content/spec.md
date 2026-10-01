@@ -6,6 +6,8 @@ Level packs are declarative JSON, not Python modules. Validate against a checked
 
 The initial grid remains 16 columns by 16 rows. Level format may version into other dimensions later, but the first migration must preserve the original coordinate system and all three layouts.
 
+Wave data is optional and states only how many enemy tanks a wave releases. The campaign reads it as a stage's total enemy quota: the sum of the declared counts. A level that declares no waves falls back to `5 + 2 * index` enemies for its zero-based position in its pack, which is what keeps the three converted classic stages at 5, 7 and 9 without writing wave data the historical stage data does not contain. Variant mix, spawn cadence, and win timing stay campaign rules and are recorded in the product specification; nothing in this package interprets them. Per-wave gating — holding one wave until the previous is cleared — is not part of the current format and needs a proposal that says how a wave is sequenced.
+
 ## Classic tile IDs
 
 Each grid row is a 16-character string. Each character encodes one tile:
