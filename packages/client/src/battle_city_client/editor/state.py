@@ -72,6 +72,7 @@ class EditorState:
     status_is_error: bool = False
     overwrite: bool = False
     quit_armed: bool = False
+    reload_armed: bool = False
     running: bool = True
 
     # -- queries ---------------------------------------------------------------
@@ -92,7 +93,7 @@ class EditorState:
         """Choose a palette entry. An index outside the palette is ignored."""
         if 0 <= index < len(PALETTE_TILES):
             self.tile_index = index
-            self.quit_armed = False
+            self.disarm()
 
     def set_tool(self, tool: Tool) -> None:
         self.tool = tool
@@ -110,7 +111,7 @@ class EditorState:
 
     def apply_at(self, cell: GridCell) -> bool:
         """Apply the active tool to ``cell``. Returns whether the document changed."""
-        self.quit_armed = False
+        self.disarm()
         changed = self._apply(cell)
         if changed:
             self.checked = False
@@ -162,7 +163,18 @@ class EditorState:
         return True
 
     def reload(self) -> bool:
-        """Re-read the opened file, discarding edits. Returns whether it was re-read."""
+        """Re-read the opened file, discarding edits. Returns whether it was re-read.
+
+        A reload throws away unsaved work exactly the way quitting does, so it asks the
+        same way: the first request arms the second and the editor stays live in between,
+        still painting, still saving, still quitting. Anything else the author does
+        clears the arming, because a confirmation that outlives the question is not a
+        confirmation.
+        """
+        if self.document.dirty and not self.reload_armed:
+            self.note("UNSAVED CHANGES - PRESS R AGAIN TO DISCARD", error=True)
+            self.reload_armed = True
+            return False
         try:
             self.document = self.document.reopen()
         except EditorRefusal as refusal:
@@ -179,7 +191,8 @@ class EditorState:
         Discarding an unsaved level on a single keystroke is the one mistake an editor
         cannot apologise for, so the first request arms the second. Anything else the
         author does clears the arming, because a confirmation that outlives the question
-        is not a confirmation.
+        is not a confirmation. :meth:`reload` discards the same work and asks the same
+        way; the two confirmations are separate, so answering one never answers the other.
         """
         if self.document.dirty and not self.quit_armed:
             self.note("UNSAVED CHANGES - PRESS ESC AGAIN TO DISCARD", error=True)
@@ -188,7 +201,12 @@ class EditorState:
         self.running = False
 
     def note(self, message: str, *, error: bool = False) -> None:
-        """Put one line in the status bar, and forget any pending quit confirmation."""
+        """Put one line in the status bar, and forget any pending confirmation."""
         self.status = message
         self.status_is_error = error
+        self.disarm()
+
+    def disarm(self) -> None:
+        """Forget every pending confirmation. The question has gone stale."""
         self.quit_armed = False
+        self.reload_armed = False

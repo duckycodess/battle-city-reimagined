@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -357,15 +358,70 @@ class EditorDocument:
             raise EditorRefusal(f"{target} already exists; relaunch with --overwrite to replace it")
 
 
+DEFAULT_FILE_MODE: Final[int] = 0o666
+"""The mode a new level file is created with, before the process umask narrows it."""
+
+_TEMPORARY_ATTEMPTS: Final[int] = 8
+"""How many names to try before giving up; a collision is already astronomically rare."""
+
+
+def _replaced_file_mode(path: Path) -> int | None:
+    """The mode to restore when ``path`` is overwritten, or ``None`` for a fresh file.
+
+    Only a regular file has a mode worth keeping. A symbolic link does not: its own bits
+    are meaningless on the platforms the editor runs on, and :func:`os.replace` replaces
+    the *link* rather than following it, so the save produces a new regular file whose
+    permissions are no more inherited than any other new file's.
+    """
+    try:
+        status = os.lstat(path)
+    except FileNotFoundError, NotADirectoryError:
+        return None
+    if not stat.S_ISREG(status.st_mode):
+        return None
+    return stat.S_IMODE(status.st_mode)
+
+
+def _open_exclusive_sibling(path: Path, mode: int) -> tuple[int, Path]:
+    """Create a new hidden file beside ``path`` and return its descriptor and name.
+
+    ``O_EXCL`` is what makes this safe without a lock: the file is created by this call
+    or not at all, so a name another writer happens to hold is a retry rather than a
+    file two writers share.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for _ in range(_TEMPORARY_ATTEMPTS):
+        candidate = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
+        try:
+            return os.open(candidate, flags, mode), candidate
+        except FileExistsError:
+            continue
+    raise EditorRefusal(f"could not create a temporary file beside {path}")
+
+
 def _write_atomic(path: Path, payload: bytes) -> None:
     """Replace ``path`` in one step, through a temporary file in the same directory.
 
     The temporary file must share the destination's directory: :func:`os.replace` cannot
     rename across filesystems, and the system temporary directory very often is one.
+
+    It also has to carry the mode the saved file will end up with, because staging means
+    the bytes land in a file this save created rather than in the file the author opened.
+    Saving over an existing level restores that level's mode -- a stage file is created
+    ``0o600`` and widened once, so the window before :func:`os.fchmod` is narrower than
+    the finished file rather than wider -- and a new level is created ``0o666`` for the
+    kernel to narrow by the process umask, which is the mode an ordinary :func:`open`
+    would have produced. The umask itself is never read or changed: it is process-wide
+    state, and the editor shares the process with everything else the client is doing.
     """
-    handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    preserved = _replaced_file_mode(path)
+    handle, temporary = _open_exclusive_sibling(
+        path, 0o600 if preserved is not None else DEFAULT_FILE_MODE
+    )
     try:
         with os.fdopen(handle, "wb") as stream:
+            if preserved is not None:
+                os.fchmod(stream.fileno(), preserved)
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())

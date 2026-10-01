@@ -27,7 +27,7 @@ Left click on a swatch    select that tile
 ``TAB``                   next player slot
 ``V``                     validate through the content loader
 ``S``                     save to ``--output``
-``R``                     re-read the opened file, discarding edits
+``R``                     re-read the opened file; unsaved edits ask twice
 ``-`` ``+``               window scale
 ``ESC``                   quit; an unsaved document asks twice
 ========================  ====================================================

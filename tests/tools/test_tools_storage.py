@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,10 @@ from battle_city_tools import (
 )
 from battle_city_tools.validation import SCRATCH_PREFIX
 from tools_helpers import make_draft, make_level, semantics, write_level
+
+
+def mode_of(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
 
 
 def test_create_edit_save_and_reload_round_trip(tmp_path: Path) -> None:
@@ -133,16 +139,81 @@ def test_the_atomic_temporary_file_lives_in_the_destination_directory(
 ) -> None:
     """``os.replace`` cannot rename across filesystems, so the staging file stays local."""
     seen: list[str] = []
-    real = tempfile.mkstemp
+    real = os.replace
 
-    def recording(*args: Any, **kwargs: Any) -> tuple[int, str]:
-        seen.append(str(kwargs["dir"]))
-        return real(*args, **kwargs)
+    def recording(source: Any, destination: Any, **kwargs: Any) -> None:
+        seen.append(str(Path(source).parent))
+        real(source, destination, **kwargs)
 
-    monkeypatch.setattr(tempfile, "mkstemp", recording)
+    monkeypatch.setattr(os, "replace", recording)
     target = tmp_path / "nested" / "level.json"
     save_level(make_draft(), target)
     assert seen == [str(target.parent)]
+
+
+def test_a_new_file_is_created_the_way_the_umask_says(tmp_path: Path) -> None:
+    """A level is ordinary output: ``0o666`` narrowed by the umask, not a private file."""
+    previous = os.umask(0o022)
+    try:
+        save_level(make_draft(), tmp_path / "default.json")
+    finally:
+        os.umask(previous)
+    assert mode_of(tmp_path / "default.json") == 0o644
+
+
+def test_a_restrictive_umask_is_not_relaxed(tmp_path: Path) -> None:
+    previous = os.umask(0o077)
+    try:
+        save_level(make_draft(), tmp_path / "private.json")
+    finally:
+        os.umask(previous)
+    assert mode_of(tmp_path / "private.json") == 0o600
+
+
+@pytest.mark.parametrize("existing", [0o644, 0o664, 0o600, 0o640])
+def test_overwriting_keeps_the_mode_the_file_already_had(tmp_path: Path, existing: int) -> None:
+    """Staging creates the file that lands, so the replaced file's mode has to be carried."""
+    target = write_level(tmp_path / "level.json", make_draft())
+    target.chmod(existing)
+    previous = os.umask(0o077)
+    try:
+        save_level(make_draft(), target, overwrite=True)
+    finally:
+        os.umask(previous)
+    assert mode_of(target) == existing
+
+
+def test_a_failed_write_leaves_no_temporary_file_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "level.json"
+
+    def failing(*args: Any, **kwargs: Any) -> None:
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(os, "replace", failing)
+    with pytest.raises(OSError, match="disk went away"):
+        save_level(make_draft(), target)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_symbolic_link_is_replaced_rather_than_followed(tmp_path: Path) -> None:
+    """The link's own ``0o777`` bits are not a mode to inherit, and the target is left alone."""
+    behind = write_level(tmp_path / "behind.json", make_draft())
+    behind.chmod(0o640)
+    link = tmp_path / "link.json"
+    link.symlink_to(behind)
+
+    previous = os.umask(0o022)
+    try:
+        save_level(make_draft(), link, overwrite=True)
+    finally:
+        os.umask(previous)
+
+    assert link.is_symlink() is False
+    assert mode_of(link) == 0o644
+    assert mode_of(behind) == 0o640
 
 
 def test_a_malformed_file_is_refused_when_opened(tmp_path: Path) -> None:

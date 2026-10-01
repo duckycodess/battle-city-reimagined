@@ -6,7 +6,10 @@ No pygame here. Everything the editor does to a level is decided in this module 
 
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
+from typing import Any
 
 import pytest
 import tools_helpers  # noqa: F401  -- sets the SDL driver variables before anything else
@@ -16,6 +19,10 @@ from battle_city_tools import LevelDraft, save_level
 from tools_helpers import make_level, observed, semantics
 
 CLASSIC_01 = BUNDLED_ROOT / "levels" / "classic-01.json"
+
+
+def mode_of(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
 
 
 def test_a_blank_document_is_already_valid() -> None:
@@ -211,3 +218,64 @@ def test_a_bundled_level_survives_an_edit_free_round_trip(tmp_path: Path) -> Non
 def test_the_label_says_when_there_is_nowhere_to_save() -> None:
     assert EditorDocument.blank().label == "(unsaved)"
     assert "no --output" in EditorDocument.open(CLASSIC_01).label
+
+
+def test_a_saved_level_is_created_the_way_the_umask_says(tmp_path: Path) -> None:
+    """A level the editor writes is ordinary output, not a private file."""
+    document = EditorDocument.blank()
+    document.path = tmp_path / "default.json"
+    previous = os.umask(0o022)
+    try:
+        document.save()
+    finally:
+        os.umask(previous)
+    assert mode_of(document.path) == 0o644
+
+
+def test_a_restrictive_umask_is_not_relaxed_by_a_save(tmp_path: Path) -> None:
+    document = EditorDocument.blank()
+    document.path = tmp_path / "private.json"
+    previous = os.umask(0o077)
+    try:
+        document.save()
+    finally:
+        os.umask(previous)
+    assert mode_of(document.path) == 0o600
+
+
+@pytest.mark.parametrize("existing", [0o644, 0o664, 0o600])
+def test_saving_over_a_level_keeps_the_mode_it_had(tmp_path: Path, existing: int) -> None:
+    """Staging creates the file that lands, so the replaced file's mode has to be carried."""
+    target = tmp_path / "level.json"
+    seed = EditorDocument.blank()
+    seed.path = target
+    seed.save()
+    target.chmod(existing)
+
+    document = EditorDocument.open(target)
+    document.path = target
+    document.paint(GridCell(4, 4), TileCode.BRICK)
+    previous = os.umask(0o077)
+    try:
+        document.save(overwrite=True)
+    finally:
+        os.umask(previous)
+    assert mode_of(target) == existing
+
+
+def test_a_failed_save_leaves_no_temporary_file_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document = EditorDocument.blank()
+    document.path = tmp_path / "level.json"
+    document.paint(GridCell(4, 4), TileCode.BRICK)
+
+    def failing(*args: Any, **kwargs: Any) -> None:
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(os, "replace", failing)
+    with pytest.raises(OSError, match="disk went away"):
+        document.save()
+
+    assert list(tmp_path.iterdir()) == []
+    assert observed(document.dirty) is True

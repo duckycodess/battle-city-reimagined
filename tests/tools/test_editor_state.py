@@ -175,10 +175,100 @@ def test_reloading_restores_the_file_and_forgets_the_verdict(tmp_path: Path) -> 
     state.check()
     state.select_tile(2)
     state.apply_at(GridCell(5, 5))
+    assert state.reload() is False
     assert state.reload() is True
     assert state.document.dirty is False
     assert state.checked is False
     assert state.document.tile_at(GridCell(5, 5)) is TileCode.EMPTY
+
+
+def test_reloading_a_clean_document_is_immediate(tmp_path: Path) -> None:
+    target = tmp_path / "level.json"
+    seed = state_for()
+    seed.document.path = target
+    seed.save()
+
+    state = state_for(EditorDocument.open(target))
+    assert state.reload() is True
+    assert state.status == "RELOADED"
+
+
+def test_reloading_an_edited_document_asks_once(tmp_path: Path) -> None:
+    """Pressing R once must not throw away unsaved work; that is what ESC promises too."""
+    target = tmp_path / "level.json"
+    seed = state_for()
+    seed.document.path = target
+    seed.save()
+
+    state = state_for(EditorDocument.open(target))
+    state.select_tile(2)
+    state.apply_at(GridCell(5, 5))
+
+    assert state.reload() is False
+    assert "UNSAVED" in state.status
+    assert state.status_is_error is True
+    assert state.document.dirty is True
+    assert state.document.tile_at(GridCell(5, 5)) is not TileCode.EMPTY
+
+    assert state.reload() is True
+    assert state.document.dirty is False
+
+
+def test_an_armed_reload_leaves_the_editor_responsive(tmp_path: Path) -> None:
+    """Arming is a question, not a modal: every other command still works."""
+    target = tmp_path / "level.json"
+    seed = state_for()
+    seed.document.path = target
+    seed.save()
+
+    state = state_for(EditorDocument.open(target))
+    state.document.path = tmp_path / "copy.json"
+    state.select_tile(2)
+    state.apply_at(GridCell(5, 5))
+    state.reload()
+
+    assert state.check() is None
+    assert state.reload_armed is False
+    state.reload()
+    assert state.save() is True
+    assert state.reload_armed is False
+
+
+def test_any_other_action_cancels_a_pending_reload(tmp_path: Path) -> None:
+    """A confirmation that outlives the question is not a confirmation."""
+    target = tmp_path / "level.json"
+    seed = state_for()
+    seed.document.path = target
+    seed.save()
+
+    state = state_for(EditorDocument.open(target))
+    state.select_tile(2)
+    state.apply_at(GridCell(5, 5))
+    state.reload()
+    state.apply_at(GridCell(6, 6))
+
+    assert state.reload() is False
+    assert state.document.dirty is True
+
+
+def test_arming_a_reload_does_not_arm_a_quit(tmp_path: Path) -> None:
+    """Two separate questions: answering one never answers the other."""
+    target = tmp_path / "level.json"
+    seed = state_for()
+    seed.document.path = target
+    seed.save()
+
+    state = state_for(EditorDocument.open(target))
+    state.select_tile(2)
+    state.apply_at(GridCell(5, 5))
+
+    state.reload()
+    state.quit()
+    assert state.running is True
+    assert state.reload_armed is False
+
+    assert state.reload() is False
+    assert state.document.dirty is True
 
 
 def test_reloading_a_document_with_no_file_reports_the_refusal() -> None:
