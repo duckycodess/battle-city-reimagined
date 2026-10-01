@@ -97,10 +97,13 @@ class DifficultyProfile:
     changes every decision it makes and is therefore a replay-compatibility change."""
 
     reaction_delay_ticks: int
-    """Consecutive ticks a firing solution must hold before the bot may shoot.
+    """Ticks a firing solution must hold before the bot may shoot.
 
-    This is the profile's reflex speed. A bot that has been lined up for fewer than this
-    many ticks holds fire even when the shot is otherwise legal and clear.
+    This is the profile's reflex speed, counted in ticks of waiting rather than in ticks
+    of being lined up: with ``n`` set to zero the bot takes the shot the tick it appears,
+    and with ``n`` of one it holds that first shot and takes the next. Every value is
+    therefore a distinct cadence, which a gate that counted the current tick would not
+    give - it would collapse zero and one onto the same instant shot.
     """
 
     plan_commit_ticks: int
@@ -127,12 +130,18 @@ class DifficultyProfile:
     """
 
     miss_chance_percent: int
-    """Seeded chance, per otherwise-valid shot, that the bot holds fire instead.
+    """Seeded chance, per shot *opportunity*, that the bot holds fire instead.
 
     This is the second half of the aim-error model and the only one that consumes the
     bot's random stream. Modelling error as a declined shot rather than as a deliberately
     wrong facing keeps every emitted command a command a skilled player could also have
     emitted, which is what the specification means by "legal inputs".
+
+    A declined shot costs the opportunity, not a tick: :attr:`fire_cooldown_ticks` starts
+    again exactly as if the shot had been taken, so a bot that declines at 75 percent
+    fires about a quarter as often as one that never declines. The alternative - leaving
+    the cooldown untouched and re-rolling next tick - would turn the knob into a delay of
+    a tick or two before the shot went off anyway, which is not an accuracy setting.
     """
 
     aggression_percent: int

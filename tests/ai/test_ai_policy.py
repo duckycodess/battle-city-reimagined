@@ -15,6 +15,7 @@ from battle_city_ai import (
     BotDecision,
     DifficultyProfile,
     TargetPreference,
+    clearance_ticks,
     decide,
     muzzle_of,
     plan_tick,
@@ -24,8 +25,8 @@ from battle_city_ai import (
 )
 from battle_city_sim import (
     DEFAULT_RULES,
+    DIRECTION_ORDER,
     Command,
-    Direction,
     FireCommand,
     GridPos,
     MoveCommand,
@@ -151,6 +152,20 @@ def test_a_bot_never_spends_a_fire_command_the_engine_would_drop(
         bots = plan.bots
 
 
+@pytest.mark.parametrize("commitment", [1, 2, 3, 7])
+def test_a_commitment_of_n_ticks_spans_exactly_n_ticks(commitment: int) -> None:
+    # The counter is read after it is decremented, so the tick that sets a commitment is
+    # the first of its ``n`` ticks rather than a free extra one on top of them.
+    state = game()
+    profile = replace(_metronome(), name=f"committed-{commitment}", plan_commit_ticks=commitment)
+    bot = Bot.create(tank_id=PLAYER_TANK_ID, profile=profile, seed=seed_from_state(state))
+    for tick in range(4 * commitment):
+        decision = decide(bot, state)
+        assert decision.bot.memory.plan_ticks_left == commitment - (tick % commitment)
+        state = step(state, TickInput.from_iterable(state.tick, decision.commands)).state
+        bot = decision.bot
+
+
 @pytest.mark.parametrize("profile", PROFILE_ORDER, ids=lambda item: item.name)
 def test_shots_from_one_bot_stay_inside_the_profiles_cadence(
     profile: DifficultyProfile,
@@ -257,9 +272,10 @@ def _first_shot_tick(
 
 @pytest.mark.parametrize("delay", [0, 1, 2, 5, 13])
 def test_reaction_delay_is_the_number_of_ticks_a_solution_must_hold(delay: int) -> None:
-    # The bot turns toward the target on its first tick, which is already an engaged tick,
-    # so a delay of ``n`` puts the shot on tick ``n - 1`` and a delay of zero shoots at once.
-    assert _first_shot_tick(_metronome(reaction_delay_ticks=delay)) == max(delay - 1, 0)
+    # The gate counts ticks of waiting, so a delay of ``n`` puts the shot ``n`` ticks after
+    # the solution appears and every setting is a distinct cadence. Counting the current
+    # tick instead would make a one-tick reflex indistinguishable from no reflex at all.
+    assert _first_shot_tick(_metronome(reaction_delay_ticks=delay)) == delay
 
 
 def test_a_cautious_bot_holds_its_line_and_an_aggressive_one_closes() -> None:
@@ -353,14 +369,31 @@ def test_the_easiest_profile_is_measurably_the_slowest_to_win() -> None:
     assert rookie > ticks_to_kill(VETERAN)
 
 
-def test_a_bot_steers_around_an_obstacle_instead_of_grinding_into_it() -> None:
+def test_a_bot_never_commits_to_a_direction_the_engine_would_refuse() -> None:
+    # A stone between the bot and its target, which bounded roaming has no way around:
+    # the horizon is a straight-line probe, not a path search, so the bot patrols in front
+    # of the obstacle rather than rounding it. What it must never do is grind: every move
+    # it commits to has somewhere to go at the moment it is issued, and the run keeps
+    # producing movement rather than settling against the wall.
     state: SimulationState = game(
         arena(overrides={GridPos(5, 4): Tile.STONE}, player_cell=GridPos(5, 5))
     )
     state = with_enemy(state, GridPos(5, 2))
     bots = bots_for(state, {PLAYER_TANK_ID: VETERAN})
-    session = drive(state, bots, 120)
-    tank = session.state.tank(PLAYER_TANK_ID)
-    start = state.tank(PLAYER_TANK_ID).position
-    assert tank.position != start
-    assert tank.facing in (Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT)
+
+    visited = {state.tank(PLAYER_TANK_ID).position}
+    for _ in range(120):
+        plan = plan_tick(bots, state)
+        for command in plan.tick_input.commands:
+            if not isinstance(command, MoveCommand):
+                continue
+            tank = state.tank(command.tank_id)
+            assert clearance_ticks(state, tank, command.direction, 1) == 1, (
+                f"committed to a refused step at tick {state.tick}"
+            )
+        state = step(state, plan.tick_input).state
+        bots = plan.bots
+        visited.add(state.tank(PLAYER_TANK_ID).position)
+
+    assert len(visited) > 1
+    assert state.tank(PLAYER_TANK_ID).facing in DIRECTION_ORDER

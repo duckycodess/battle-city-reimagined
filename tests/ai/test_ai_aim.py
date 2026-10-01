@@ -30,6 +30,7 @@ from battle_city_sim import (
     FireCommand,
     GridPos,
     MoveCommand,
+    ProjectileFired,
     SimulationState,
     TankDestroyed,
     TickInput,
@@ -181,3 +182,72 @@ def test_the_realised_miss_rate_matches_the_declared_one(miss_chance_percent: in
     # quarter of its shots has to decline about a quarter of them over a population.
     expected = (100 - miss_chance_percent) / 100
     assert abs(_fire_rate(miss_chance_percent) - expected) < 0.06
+
+
+PATIENT_COOLDOWN = 20
+"""Fire cooldown for the cadence sample, long enough that a spent opportunity is visible.
+
+A declined shot costs one cooldown, so with a miss chance of ``m`` a bot waits
+``PATIENT_COOLDOWN * m / (100 - m)`` ticks on average before its first shot leaves: zero
+at ``m = 0``, one cooldown at ``m = 50``, three at ``m = 75``.
+"""
+
+
+def _patient_marksman(miss_chance_percent: int) -> DifficultyProfile:
+    """A marksman whose only delay is the miss roll and the cooldown each miss costs."""
+    return DifficultyProfile(
+        name=f"patient-{miss_chance_percent}",
+        reaction_delay_ticks=0,
+        plan_commit_ticks=1,
+        planning_horizon_ticks=4,
+        aim_tolerance_px=0,
+        miss_chance_percent=miss_chance_percent,
+        aggression_percent=0,
+        fire_cooldown_ticks=PATIENT_COOLDOWN,
+        target_preference=TargetPreference.NEAREST,
+    )
+
+
+def _ticks_to_first_shot(profile: DifficultyProfile, seed: int, cap: int) -> int | None:
+    """Return how many ticks one seeded bot takes to put a projectile on the board."""
+    state = with_enemy(game(), GridPos(12, 2))
+    bot = Bot.create(tank_id=PLAYER_TANK_ID, profile=profile, seed=seed)
+    start = state.tick
+    for _ in range(cap):
+        decision = decide(bot, state)
+        result = step(state, TickInput.from_iterable(state.tick, decision.commands))
+        if any(isinstance(event, ProjectileFired) for event in result.events):
+            return state.tick - start
+        state = result.state
+        bot = decision.bot
+    return None
+
+
+def _mean_ticks_to_first_shot(
+    miss_chance_percent: int,
+    population: int = 150,
+    cap: int = 1500,
+) -> float:
+    """Mean first-shot latency over a seeded population, in ticks."""
+    profile = _patient_marksman(miss_chance_percent)
+    latencies = [_ticks_to_first_shot(profile, seed, cap) for seed in _sample_seeds(population)]
+    assert all(value is not None for value in latencies), "a bot never took its shot"
+    return sum(value for value in latencies if value is not None) / population
+
+
+def test_a_declined_shot_costs_a_cooldown_and_not_merely_a_tick() -> None:
+    # The multi-tick counterpart to the single-tick rate tests above, and the one that
+    # makes ``miss_chance_percent`` a cadence dial rather than a rounding error. A bot
+    # that re-rolled on the very next tick would reach its first shot in a tick or two at
+    # every setting here, so every bound below would fail by an order of magnitude.
+    never = _mean_ticks_to_first_shot(0)
+    even = _mean_ticks_to_first_shot(50)
+    steep = _mean_ticks_to_first_shot(75)
+
+    assert never == 0.0
+    assert never < even < steep
+
+    # One spent cooldown on average at 50 percent, three at 75: a real difference in how
+    # often the bot shoots, not a delay before it shoots anyway.
+    assert PATIENT_COOLDOWN * 0.6 < even < PATIENT_COOLDOWN * 1.5
+    assert PATIENT_COOLDOWN * 1.8 < steep < PATIENT_COOLDOWN * 4.5

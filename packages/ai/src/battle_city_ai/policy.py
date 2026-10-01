@@ -39,7 +39,16 @@ the decision history and nothing else:
 2. one accuracy draw on a tick where a shot is otherwise cleared to go.
 
 Neither draw happens on a tick that cannot use it, so two bots that never see a target
-stay at the same stream position.
+stay at the same stream position. A declined accuracy draw still spends the shot: see
+:attr:`~battle_city_ai.profiles.DifficultyProfile.miss_chance_percent`.
+
+What outranks what
+------------------
+A shot the bot can actually take this tick outranks everything, including a dodge. Every
+other case lets the dodge act: being lined up on a target is not a reason to stand in a
+projectile's path while a cooldown, a reaction gate or the engine's projectile allowance
+makes the shot impossible anyway. With no dodge to make, an aim that is merely waiting on
+one of those gates still holds its facing rather than wandering off and losing it.
 
 Deliberately absent
 -------------------
@@ -78,7 +87,7 @@ from .perception import (
     manhattan,
     muzzle_of,
     predicted_pose,
-    projectile_reaches,
+    projectile_reaches_moving,
     shot_target_id,
 )
 from .profiles import DifficultyProfile, TargetPreference
@@ -120,8 +129,14 @@ class BotMemory:
     """The last aggression draw: whether the bot closes distance while it has a firing line."""
 
     engaged_ticks: int = 0
-    """Consecutive ticks the bot has held a firing solution, saturating at the profile's
-    reaction delay. This is the reflex counter the reaction-delay gate reads."""
+    """Consecutive *earlier* ticks on which the bot held a firing solution, saturating at
+    the profile's reaction delay.
+
+    The gate reads this counter before the current tick is folded into it, so a profile
+    that asks for ``n`` ticks of delay really waits ``n`` ticks: with ``n`` of one the bot
+    holds its first offered shot and takes the second, which is what distinguishes a
+    one-tick reflex from the instant one at zero.
+    """
 
     ticks_since_fire: int = 0
     """Ticks since the last shot, saturating at the profile's fire cooldown."""
@@ -204,7 +219,9 @@ def decide(
     stuck = (
         plan_direction is not None and clearance_ticks(state, tank, plan_direction, 1, rules) == 0
     )
-    if memory.plan_ticks_left <= 0 or stuck:
+    # The decremented counter is what the boundary is read from, so a commitment of ``n``
+    # ticks spans exactly ``n`` ticks: the tick that sets it plus ``n - 1`` more.
+    if plan_ticks_left <= 0 or stuck:
         roll, rng = rng.below(PERCENT)
         pursuing = roll < profile.aggression_percent
         plan_direction = None
@@ -213,35 +230,49 @@ def decide(
     target = _select_target(state, tank, profile)
     move, engaged = _engagement(state, tank, target, profile, pursuing, rules)
 
-    if engaged:
-        # A firing line outranks the roaming plan, and outranks dodging: a bot that has
-        # the shot takes it rather than stepping out of its own line of fire.
+    engaged_ticks = min(memory.engaged_ticks + 1, profile.reaction_delay_ticks) if engaged else 0
+    ticks_since_fire = min(memory.ticks_since_fire + 1, profile.fire_cooldown_ticks)
+    # Every gate on firing is settled before the move is, because "can this bot shoot
+    # right now?" is what decides whether the firing line is allowed to suppress a dodge.
+    # None of the three depends on where the tank ends up this tick: the reaction and
+    # cooldown gates are counters, and the allowance gate counts projectiles already in
+    # flight, so asking them early costs nothing and answers the same.
+    shot_is_ready = (
+        engaged
+        and memory.engaged_ticks >= profile.reaction_delay_ticks
+        and ticks_since_fire >= profile.fire_cooldown_ticks
+        and _shot_is_available(state, tank, rules)
+    )
+
+    if shot_is_ready:
+        # A shot the bot can take this tick outranks the roaming plan and outranks
+        # dodging: it does not step out of a line of fire it is about to use.
         plan_direction = None
     else:
         threat = incoming_threat(state, tank, profile.planning_horizon_ticks, rules)
         dodge = None if threat is None else _dodge_direction(state, tank, threat, profile, rules)
         if dodge is not None:
+            # No shot this tick, so there is nothing to protect the facing for.
             plan_direction = dodge
             plan_ticks_left = profile.plan_commit_ticks
-        elif plan_direction is None:
-            plan_direction = _roam_direction(state, tank, target, profile, rules)
-        move = plan_direction
-
-    pose = predicted_pose(state, tank, move, rules)
-    engaged_ticks = min(memory.engaged_ticks + 1, profile.reaction_delay_ticks) if engaged else 0
-    ticks_since_fire = min(memory.ticks_since_fire + 1, profile.fire_cooldown_ticks)
+            move = dodge
+        elif engaged:
+            # Lined up but gated, and nothing to dodge: hold the aim rather than roam off
+            # it, or a bot behind a long cooldown would never accumulate a reaction.
+            plan_direction = None
+        else:
+            if plan_direction is None:
+                plan_direction = _roam_direction(state, tank, target, profile, rules)
+            move = plan_direction
 
     fire = False
-    if (
-        engaged
-        and engaged_ticks >= profile.reaction_delay_ticks
-        and ticks_since_fire >= profile.fire_cooldown_ticks
-        and _shot_is_available(state, pose, rules)
-    ):
+    if shot_is_ready:
         roll, rng = rng.below(PERCENT)
         fire = roll >= profile.miss_chance_percent
-        if fire:
-            ticks_since_fire = 0
+        # Spent either way. A declined shot that left the cooldown untouched would be
+        # re-rolled on the very next tick, which costs a tick instead of an opportunity
+        # and makes the knob almost inert; see ``miss_chance_percent``.
+        ticks_since_fire = 0
 
     commands: list[Command] = []
     if move is not None:
@@ -374,6 +405,10 @@ def _shot_is_available(state: SimulationState, tank: Tank, rules: Rules) -> bool
     the engine accepts and then quietly drops. The gatling test compares against ``1``
     because the expiry phase decrements the timer before the fire phase reads it, so a
     tank on its last gatling tick is no longer under gatling when it would matter.
+
+    Both terms are allowance, not geometry: the powerup timer and the projectiles already
+    owned are the same whether or not this tick's move lands. So the pre-move tank answers
+    exactly as its predicted pose would, and the caller can ask before it has chosen a move.
     """
     if tank.gatling_ticks > 1:
         return True
@@ -427,8 +462,9 @@ def _dodge_direction(
 
     Only the two facings perpendicular to the shot are considered, because a projectile
     moves 3px a tick and a tank 2px: fleeing along the shot's axis loses the race. A
-    candidate is checked at the pose it reaches after its full clearance run, and a
-    candidate that escapes the line always beats one that merely moves.
+    candidate escapes only when the shot misses it on *every* tick of the run, not merely
+    at the pose it ends on, and a candidate that escapes always beats one that merely
+    moves.
     """
     horizon = profile.planning_horizon_ticks
     best: tuple[int, int, int] | None = None
@@ -439,10 +475,7 @@ def _dodge_direction(
         clearance = clearance_ticks(state, tank, direction, horizon, rules)
         if clearance == 0:
             continue
-        pose = tank
-        for _ in range(clearance):
-            pose = predicted_pose(state, pose, direction, rules)
-        escaped = not projectile_reaches(state, threat, pose, horizon, rules)
+        escaped = not projectile_reaches_moving(state, threat, tank, direction, horizon, rules)
         score = (1 if escaped else 0, clearance, -index)
         if best is None or score > best:
             best = score

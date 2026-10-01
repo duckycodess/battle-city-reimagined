@@ -298,8 +298,10 @@ def projectile_reaches(
 ) -> bool:
     """Return whether ``projectile`` would strike ``tank`` within ``horizon`` ticks.
 
-    The single-projectile core of :func:`incoming_threat`, exposed so a bot can ask the
-    follow-up question a dodge needs: "would this shot still reach me from *there*?"
+    The single-projectile core of :func:`incoming_threat`. Both bodies are held still:
+    this answers "am I in the line as I stand now?". A bot evaluating an escape asks
+    :func:`projectile_reaches_moving` instead, because standing still is not what it is
+    about to do.
     """
     width, height = state.world_size(rules)
     span = 2 * rules.projectile_radius + 1
@@ -320,5 +322,50 @@ def projectile_reaches(
             span,
         )
         if body.overlaps(target):
+            return tank.invincible_ticks <= elapsed
+    return False
+
+
+def projectile_reaches_moving(
+    state: SimulationState,
+    projectile: Projectile,
+    tank: Tank,
+    direction: Direction,
+    horizon: int,
+    rules: Rules = DEFAULT_RULES,
+) -> bool:
+    """Return whether ``projectile`` strikes ``tank`` while ``tank`` steps in ``direction``.
+
+    The escape question, asked honestly. Comparing the projectile's whole flight against
+    only the pose a tank ends on would miss the case the dodge exists to avoid: a body
+    that is struck part-way through its run and never reaches that final pose at all. So
+    both move together, one tick at a time, in the engine's own phase order - tanks move
+    (``step._phase_move``) before projectiles advance and resolve against them - and the
+    first overlap ends the walk.
+
+    The run stops advancing the tank once its path is refused, which is what makes this
+    the full answer rather than :func:`clearance_ticks` plus a guess: a tank that runs
+    into a wall after three ticks keeps being traced where it actually stands.
+    """
+    width, height = state.world_size(rules)
+    span = 2 * rules.projectile_radius + 1
+    dx, dy = projectile.direction.scaled(rules.projectile_speed)
+    position = projectile.position
+    pose = tank
+    for elapsed in range(1, horizon + 1):
+        pose = predicted_pose(state, pose, direction, rules)
+        position = position.translated(dx, dy)
+        if not (0 <= position.x < width and 0 <= position.y < height):
+            return False
+        tile = state.grid.at(cell_of(position, rules.tile_size))
+        if tile in MIRROR_REFLECTIONS or not passes_projectile(tile):
+            return False
+        body = Rect(
+            position.x - rules.projectile_radius,
+            position.y - rules.projectile_radius,
+            span,
+            span,
+        )
+        if body.overlaps(pose.body(rules)):
             return tank.invincible_ticks <= elapsed
     return False

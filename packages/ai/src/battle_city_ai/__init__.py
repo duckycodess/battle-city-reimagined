@@ -80,6 +80,7 @@ from .perception import (
     muzzle_of,
     predicted_pose,
     projectile_reaches,
+    projectile_reaches_moving,
     shot_target_id,
 )
 from .policy import (
@@ -148,6 +149,7 @@ __all__ = [
     "profile_code",
     "profile_named",
     "projectile_reaches",
+    "projectile_reaches_moving",
     "seed_from_state",
     "shot_target_id",
 ]
