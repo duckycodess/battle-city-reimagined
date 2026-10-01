@@ -29,7 +29,6 @@ from battle_city_protocol import (
     ServerMessage,
     StateSnapshot,
     client_channel,
-    server_channel,
 )
 from battle_city_server import (
     LoopbackStream,
@@ -37,6 +36,7 @@ from battle_city_server import (
     SessionConfig,
     SessionLimits,
     SessionServer,
+    TcpStream,
     loopback_pair,
 )
 from battle_city_sim import GridPos, PlayerSpawn, Stage, Tile
@@ -179,7 +179,7 @@ class Client:
 async def connect(server: SessionServer) -> Client:
     """Attach a loopback client to ``server`` and start serving it."""
     client_end, server_end = loopback_pair()
-    task = asyncio.create_task(server.serve(server_channel(server_end)))
+    task = asyncio.create_task(server.serve(server.channel_for(server_end)))
     await asyncio.sleep(0)
     return Client(channel=client_channel(client_end), task=task, stream=client_end)
 
@@ -237,3 +237,10 @@ def split_frames(data: bytes) -> list[bytes]:
         frames.append(data[offset : offset + length])
         offset += length
     return frames
+
+
+async def open_tcp_client(port: int) -> tuple[ClientChannel, TcpStream]:
+    """Open a real TCP client against a listening server."""
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    stream = TcpStream(reader, writer)
+    return client_channel(stream), stream

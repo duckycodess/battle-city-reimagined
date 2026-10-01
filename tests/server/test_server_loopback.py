@@ -23,7 +23,6 @@ from battle_city_protocol import (
     decode_server_message,
     encode_frame,
     encode_message,
-    server_channel,
 )
 from battle_city_server import ManualClock, SessionLimits, SessionServer
 from battle_city_sim import Direction, state_hash
@@ -206,7 +205,7 @@ def test_a_client_that_stops_reading_is_dropped() -> None:
         limits = SessionLimits(max_outbound_messages=2, keyframe_interval=30)
         server = SessionServer(make_config(limits=limits), flush_timeout=0.05)
         stream = BlockedStream(encode_frame(encode_message(join_request(1))))
-        task = asyncio.create_task(server.serve(server_channel(stream)))
+        task = asyncio.create_task(server.serve(server.channel_for(stream)))
         await asyncio.sleep(0)
         assert server.session.joined_slots() == (1,)
 

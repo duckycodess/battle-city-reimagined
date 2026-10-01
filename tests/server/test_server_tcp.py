@@ -11,26 +11,18 @@ import asyncio
 from battle_city_protocol import (
     FRAME_HEADER_BYTES,
     MAX_FRAME_BYTES,
-    ClientChannel,
     DirectionCode,
     InputAccepted,
     JoinAccepted,
     Rejected,
     RejectionCode,
     StateSnapshot,
-    client_channel,
     encode_frame,
     encode_message,
 )
-from battle_city_server import SessionServer, TcpStream, serve_tcp
+from battle_city_server import SessionServer, serve_tcp
 from battle_city_sim import Direction, state_hash
-from server_helpers import join_request, make_config, move
-
-
-async def open_client(port: int) -> tuple[ClientChannel, TcpStream]:
-    reader, writer = await asyncio.open_connection("127.0.0.1", port)
-    stream = TcpStream(reader, writer)
-    return client_channel(stream), stream
+from server_helpers import join_request, make_config, move, open_tcp_client
 
 
 def test_a_tcp_client_plays_a_tick() -> None:
@@ -38,7 +30,7 @@ def test_a_tcp_client_plays_a_tick() -> None:
         server = SessionServer(make_config())
         listener = await serve_tcp(server, "127.0.0.1", 0)
         port = listener.sockets[0].getsockname()[1]
-        channel, _ = await open_client(port)
+        channel, _ = await open_tcp_client(port)
 
         await channel.send(join_request(1))
         accepted = await channel.receive()
@@ -69,7 +61,7 @@ def test_an_oversized_frame_over_tcp_is_refused_and_closed() -> None:
         server = SessionServer(make_config())
         listener = await serve_tcp(server, "127.0.0.1", 0)
         port = listener.sockets[0].getsockname()[1]
-        channel, stream = await open_client(port)
+        channel, stream = await open_tcp_client(port)
 
         await channel.send(join_request(1))
         await channel.receive()
@@ -93,7 +85,7 @@ def test_a_dropped_tcp_connection_leaves_the_session_running() -> None:
         server = SessionServer(make_config())
         listener = await serve_tcp(server, "127.0.0.1", 0)
         port = listener.sockets[0].getsockname()[1]
-        channel, _ = await open_client(port)
+        channel, _ = await open_tcp_client(port)
 
         await channel.send(join_request(1))
         await channel.receive()
@@ -121,7 +113,7 @@ def test_a_frame_split_across_writes_is_reassembled() -> None:
         server = SessionServer(make_config())
         listener = await serve_tcp(server, "127.0.0.1", 0)
         port = listener.sockets[0].getsockname()[1]
-        channel, stream = await open_client(port)
+        channel, stream = await open_tcp_client(port)
 
         frame = encode_frame(encode_message(join_request(1)))
         await stream.write(frame[:3])

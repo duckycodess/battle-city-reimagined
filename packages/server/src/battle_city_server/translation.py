@@ -72,6 +72,15 @@ DIRECTIONS: dict[DirectionCode, Direction] = {
 """The wire facings and the simulation facings, side by side."""
 
 
+class UntranslatableEventError(Exception):
+    """A simulation event has no entry in the published protocol event table.
+
+    This is a programming error, not a client error: the two vocabularies have drifted.
+    It is raised rather than skipped so the gap is reported instead of being broadcast
+    as an authoritative tick that quietly lost an event.
+    """
+
+
 class IllegalActionError(Exception):
     """A client's actions cannot apply to the state the tick will run against.
 
@@ -339,3 +348,12 @@ def protocol_event(event: Event) -> GameEvent:
             )
         case RunEnded():
             return GameEvent.of(EventKind.RUN_ENDED, event.outcome.value)
+        case _:
+            # The simulation's event union is exhausted above, so a new event kind is
+            # a type error here before it is a runtime one. Refusing it loudly anyway
+            # means an unmapped event can never leave the server as silence: a client
+            # would otherwise be told a tick produced nothing when it produced
+            # something nobody translated.
+            raise UntranslatableEventError(
+                f"no protocol record for simulation event {type(event).__name__}"
+            )

@@ -35,8 +35,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
-from battle_city_protocol import server_channel
-
 from .server import SessionServer
 
 
@@ -88,7 +86,8 @@ async def serve_tcp(server: SessionServer, host: str, port: int) -> asyncio.Serv
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         stream = TcpStream(reader, writer)
-        await server.serve(server_channel(stream))
+        # The server builds the channel so the frame deadline cannot be left off.
+        await server.serve(server.channel_for(stream))
 
     return await asyncio.start_server(handle, host, port)
 

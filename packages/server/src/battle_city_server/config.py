@@ -72,6 +72,38 @@ class SessionLimits:
     keyframe_interval: int = 30
     """Ticks between snapshots that carry the terrain grid."""
 
+    max_connections: int = 8
+    """Connections the server will hold at once, joined or not.
+
+    Accepting without a cap is accepting a memory and task budget set by whoever dials
+    in. The cap is separate from, and larger than, the player count: a connection that
+    has not joined yet is still a connection, and a slot that is being handed over
+    briefly needs room for two.
+    """
+
+    max_join_attempts: int = 3
+    """Failed join attempts one connection may make before it is closed.
+
+    Without a budget, a single socket can sit there trying tokens for as long as it
+    likes. Three is enough for a client correcting a typo and few enough that guessing
+    costs a new connection every time, which the connection cap then bounds.
+    """
+
+    join_deadline_seconds: float = 10.0
+    """Seconds a connection has to prove membership before it is closed.
+
+    This bounds the unauthenticated population. It applies only before joining: a joined
+    client that says nothing for an hour is idle, which is allowed and normal.
+    """
+
+    frame_deadline_seconds: float = 5.0
+    """Seconds a frame that has started arriving has to finish arriving.
+
+    A peer that declares a payload and then stops sending costs a reader one parked task
+    for ever. The deadline runs from the first byte of a frame, so it never fires on an
+    idle connection waiting between frames.
+    """
+
     def __post_init__(self) -> None:
         for name in (
             "max_batches_per_tick",
@@ -79,8 +111,13 @@ class SessionLimits:
             "max_tick_lead",
             "max_outbound_messages",
             "keyframe_interval",
+            "max_connections",
+            "max_join_attempts",
         ):
             if getattr(self, name) <= 0:
+                raise ServerConfigurationError(f"limits.{name} must be positive")
+        for name in ("join_deadline_seconds", "frame_deadline_seconds"):
+            if getattr(self, name) <= 0.0:
                 raise ServerConfigurationError(f"limits.{name} must be positive")
 
 

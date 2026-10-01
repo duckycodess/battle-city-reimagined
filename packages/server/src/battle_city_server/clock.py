@@ -15,7 +15,8 @@ same canonical state.
 from __future__ import annotations
 
 import asyncio
-from typing import Protocol
+from collections.abc import Callable
+from typing import Final, Protocol
 
 
 class TickClock(Protocol):
@@ -25,33 +26,75 @@ class TickClock(Protocol):
         """Return once ``tick`` is due."""
 
 
+DEFAULT_MAX_CATCHUP_TICKS: Final[int] = 8
+"""How far behind its schedule a session may be before it stops trying to catch up."""
+
+
 class RealTimeClock:
     """A fixed-rate clock anchored to the first tick it is asked about.
 
-    Sleeping for the remaining time to an absolute deadline, rather than for one tick
-    period, stops the cadence drifting when a tick takes longer than its budget: the
-    session catches up instead of falling steadily further behind.
+    Sleeping until an absolute deadline, rather than for one tick period, stops the
+    cadence drifting when a tick takes longer than its budget: a session that overran
+    by a little catches up instead of falling steadily further behind.
+
+    Catch-up is bounded, which matters more than it sounds. A process that was descheduled
+    for a second owes sixty ticks at sixty hertz, and running them back to back is the
+    worst thing the server could do with that second: it bursts sixty snapshots into
+    every client's bounded outbound queue, which overflows the queue and disconnects
+    exactly the clients that did nothing wrong. Past :attr:`max_catchup_ticks` the clock
+    re-anchors to now and the owed ticks are abandoned — a run that skips wall-clock time
+    is a run that is late, while a run that floods its clients is a run that is over.
+    Simulation time is unaffected either way: ticks are still consecutive integers.
     """
 
-    __slots__ = ("_anchor", "_anchor_tick", "_period")
+    __slots__ = ("_anchor", "_anchor_tick", "_dropped", "_max_catchup", "_now", "_period")
 
-    def __init__(self, tick_rate: int) -> None:
+    def __init__(
+        self,
+        tick_rate: int,
+        *,
+        max_catchup_ticks: int = DEFAULT_MAX_CATCHUP_TICKS,
+        now: Callable[[], float] | None = None,
+    ) -> None:
         if tick_rate <= 0:
             raise ValueError("tick_rate must be positive")
+        if max_catchup_ticks <= 0:
+            raise ValueError("max_catchup_ticks must be positive")
         self._period = 1.0 / tick_rate
+        self._max_catchup = max_catchup_ticks
+        self._now = now
         self._anchor: float | None = None
         self._anchor_tick = 0
+        self._dropped = 0
+
+    @property
+    def dropped_ticks(self) -> int:
+        """How many times the clock gave up catching up. A health signal, not a rule."""
+        return self._dropped
+
+    def _time(self) -> float:
+        if self._now is not None:
+            return self._now()
+        return asyncio.get_running_loop().time()
 
     async def wait_for_tick(self, tick: int) -> None:
-        loop = asyncio.get_running_loop()
+        now = self._time()
         if self._anchor is None:
-            self._anchor = loop.time()
+            self._anchor = now
             self._anchor_tick = tick
             return
         deadline = self._anchor + (tick - self._anchor_tick) * self._period
-        delay = deadline - loop.time()
+        delay = deadline - now
         if delay > 0:
             await asyncio.sleep(delay)
+            return
+        if -delay > self._max_catchup * self._period:
+            self._anchor = now
+            self._anchor_tick = tick
+            self._dropped += 1
+        # Behind schedule, so there is nothing to wait for, but yielding is not
+        # optional: the writer tasks that drain client queues run on this loop too.
+        await asyncio.sleep(0)
 
 
 class ManualClock:

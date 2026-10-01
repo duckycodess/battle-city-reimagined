@@ -85,6 +85,21 @@ class RejectionCode(StrEnum):
     ILLEGAL_COMMAND = "illegal_command"
     """The simulation refused the batch for the state it was scheduled against."""
 
+    TOO_MANY_CONNECTIONS = "too_many_connections"
+    """The server is already holding as many connections as it will hold."""
+
+    JOIN_TIMEOUT = "join_timeout"
+    """A connection was opened but never proved membership in time."""
+
+    TOO_MANY_ATTEMPTS = "too_many_attempts"
+    """A connection spent its budget of failed join attempts."""
+
+    FRAME_TIMEOUT = "frame_timeout"
+    """A frame began arriving and then stopped. An idle connection is not this."""
+
+    INTERNAL_ERROR = "internal_error"
+    """The server failed to produce a tick. The session ends rather than hanging."""
+
     SESSION_CLOSED = "session_closed"
     """The session ended. The first release does not migrate or resume a session."""
 

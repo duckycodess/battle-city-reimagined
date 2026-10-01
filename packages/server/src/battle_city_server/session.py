@@ -37,6 +37,7 @@ that leaves stays gone and the simulation carries on without it.
 from __future__ import annotations
 
 import hmac
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -69,6 +70,7 @@ from battle_city_sim import (
 
 from .config import SessionConfig
 from .content import rules_digest
+from .logs import content_label, log_event, session_logger
 from .translation import IllegalActionError, commands_for, protocol_events, snapshot_of
 
 _DUMMY_TOKEN: str = "0" * 32
@@ -130,6 +132,7 @@ class GameSession:
         self._next_connection = 1
         self._closed = False
         self._server_commands: dict[int, list[Command]] = {}
+        self._log = session_logger()
         self._info = SessionInfo(
             tick_rate=config.tick_rate,
             keyframe_interval=config.limits.keyframe_interval,
@@ -166,6 +169,10 @@ class GameSession:
         return tuple(
             slot for slot, member in sorted(self._members.items()) if member.connection is not None
         )
+
+    def slot_of(self, connection: int) -> int | None:
+        """The slot ``connection`` owns, or ``None`` while it has not joined."""
+        return self._connection_slot.get(connection)
 
     def pending_ticks(self, slot: int) -> tuple[int, ...]:
         """Ticks this slot currently has input queued for, ascending. For diagnostics."""
@@ -231,6 +238,7 @@ class GameSession:
         if self._closed:
             return ()
         self._closed = True
+        self._log_event("session_closed", reason=code, detail=_short(detail) or None)
         message = self.closing_notice(code, detail)
         return tuple(
             Reply(connection=connection, message=message, close=True)
@@ -295,15 +303,56 @@ class GameSession:
     def rejection(
         self, connection: int, code: RejectionCode, detail: str = "", *, sequence: int | None = None
     ) -> Reply:
-        """Build a refusal for a connection that has not reached session logic yet."""
+        """Build a refusal, and record it.
+
+        Every refusal is logged here, where the code is decided, so one message cannot
+        be refused twice in the log or refused silently. The record carries the stable
+        code, never the message that caused it.
+        """
+        clean = _short(detail)
+        self._log_event(
+            "message_refused",
+            connection=connection,
+            reason=code,
+            detail=clean or None,
+            sequence=sequence,
+            level=logging.WARNING,
+        )
         return Reply(
             connection=connection,
             message=Rejected(
                 session_id=self._config.session_id,
                 code=code,
-                detail=_short(detail),
+                detail=clean,
                 sequence=sequence,
             ),
+        )
+
+    def _log_event(
+        self,
+        event: str,
+        *,
+        connection: int | None = None,
+        slot: int | None = None,
+        reason: RejectionCode | None = None,
+        detail: str | None = None,
+        sequence: int | None = None,
+        level: int = logging.INFO,
+    ) -> None:
+        """Emit one session record. No caller passes a credential; none may."""
+        log_event(
+            self._log,
+            event,
+            session_id=self._config.session_id,
+            tick=self._state.tick,
+            content=content_label(self._config.content),
+            rules_digest=self._info.rules_digest,
+            slot=slot if slot is not None else self.slot_of(connection) if connection else None,
+            connection=connection,
+            sequence=sequence,
+            reason=reason,
+            detail=detail,
+            level=level,
         )
 
     def _handle_join(self, connection: int, message: JoinRequest) -> tuple[Reply, ...]:
@@ -345,6 +394,7 @@ class GameSession:
 
         member.connection = connection
         self._connection_slot[connection] = member.slot
+        self._log_event("join_accepted", connection=connection, slot=member.slot)
         accepted = JoinAccepted(
             session_id=self._config.session_id,
             slot=member.slot,

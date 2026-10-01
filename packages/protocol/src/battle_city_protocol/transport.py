@@ -26,7 +26,7 @@ message it handed over was ever seen.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from .codec import decode_client_message, decode_server_message, encode_message
@@ -77,6 +77,20 @@ type ServerChannel = MessageChannel[ClientMessage, ServerMessage]
 type ClientChannel = MessageChannel[ServerMessage, ClientMessage]
 """A client's view of its server."""
 
+type PayloadGuard = Callable[[Awaitable[bytes]], Awaitable[bytes]]
+"""Wraps a read that must finish, so a half-sent frame cannot park a task for ever.
+
+A peer that declares a frame and then goes quiet costs the reader nothing to detect and
+everything to wait for, so the wait has to be bounded. The bound itself is a deployment
+decision and needs a timer, which this package has no business owning: it imports no
+event loop library. The caller therefore supplies the wrapper — ``asyncio.wait_for``,
+or whatever its framework calls that — and this package decides only *which* reads it
+applies to.
+
+It is deliberately not applied to the read that waits for a frame to begin. A joined
+client that sends nothing for an hour is idle, not stalled.
+"""
+
 
 class FramedChannel[R: Message, S: Message]:
     """A :class:`MessageChannel` over a :class:`ByteStream`.
@@ -87,11 +101,18 @@ class FramedChannel[R: Message, S: Message]:
     connection are session policy.
     """
 
-    __slots__ = ("_closed", "_decode", "_stream")
+    __slots__ = ("_closed", "_decode", "_guard", "_stream")
 
-    def __init__(self, stream: ByteStream, decode: Callable[[bytes], R]) -> None:
+    def __init__(
+        self,
+        stream: ByteStream,
+        decode: Callable[[bytes], R],
+        *,
+        payload_guard: PayloadGuard | None = None,
+    ) -> None:
         self._stream = stream
         self._decode = decode
+        self._guard = payload_guard
         self._closed = False
 
     @property
@@ -103,17 +124,33 @@ class FramedChannel[R: Message, S: Message]:
         return self._closed
 
     async def receive(self) -> R | None:
-        header = await self._stream.read_exactly(FRAME_HEADER_BYTES)
-        if not header:
+        """Return the next message, or ``None`` once the peer has finished.
+
+        The first byte is read on its own and without a guard. Waiting for a frame to
+        start is waiting for a peer to have something to say, which is unbounded by
+        design; once a frame *has* started, the rest of it is expected promptly, so the
+        remaining header bytes and the payload go through :attr:`PayloadGuard` when one
+        was supplied. Splitting the header read is what lets those two waits have
+        different deadlines, and it costs one extra read per frame.
+        """
+        start = await self._stream.read_exactly(1)
+        if not start:
             return None
+        header = start + await self._guarded(FRAME_HEADER_BYTES - 1)
         length = decode_frame_length(header)
-        payload = await self._stream.read_exactly(length)
+        payload = await self._guarded(length)
         if len(payload) != length:
             raise MessageError(
                 RejectionCode.MALFORMED_FRAME,
                 f"frame declared {length} bytes and carried {len(payload)}",
             )
         return self._decode(payload)
+
+    async def _guarded(self, count: int) -> bytes:
+        read = self._stream.read_exactly(count)
+        if self._guard is None:
+            return await read
+        return await self._guard(read)
 
     async def send(self, message: S) -> None:
         await self._stream.write(encode_frame(encode_message(message)))
@@ -123,11 +160,15 @@ class FramedChannel[R: Message, S: Message]:
         await self._stream.close()
 
 
-def server_channel(stream: ByteStream) -> FramedChannel[ClientMessage, ServerMessage]:
+def server_channel(
+    stream: ByteStream, *, payload_guard: PayloadGuard | None = None
+) -> FramedChannel[ClientMessage, ServerMessage]:
     """Wrap ``stream`` as a server's channel: client messages in, server messages out."""
-    return FramedChannel(stream, decode_client_message)
+    return FramedChannel(stream, decode_client_message, payload_guard=payload_guard)
 
 
-def client_channel(stream: ByteStream) -> FramedChannel[ServerMessage, ClientMessage]:
+def client_channel(
+    stream: ByteStream, *, payload_guard: PayloadGuard | None = None
+) -> FramedChannel[ServerMessage, ClientMessage]:
     """Wrap ``stream`` as a client's channel: server messages in, client messages out."""
-    return FramedChannel(stream, decode_server_message)
+    return FramedChannel(stream, decode_server_message, payload_guard=payload_guard)

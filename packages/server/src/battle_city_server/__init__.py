@@ -39,7 +39,7 @@ two are separate proposals, and until one lands a lost connection is a lost play
 lost server is a lost session.
 """
 
-from .clock import ManualClock, RealTimeClock, TickClock
+from .clock import DEFAULT_MAX_CATCHUP_TICKS, ManualClock, RealTimeClock, TickClock
 from .config import (
     DEFAULT_LIMITS,
     DEFAULT_TICK_RATE,
@@ -49,12 +49,14 @@ from .config import (
     SessionLimits,
 )
 from .content import content_ref_for, rules_digest, stage_from_level
+from .logs import FIELD_ORDER, LOGGER_NAME, content_label, log_event, session_logger
 from .loopback import LoopbackStream, loopback_pair
 from .server import DEFAULT_FLUSH_TIMEOUT, FATAL_FRAME_CODES, SessionServer
 from .session import GameSession, Reply
 from .tcp import TcpStream, serve_tcp
 from .translation import (
     IllegalActionError,
+    UntranslatableEventError,
     commands_for,
     grid_rows,
     protocol_event,
@@ -65,8 +67,11 @@ from .translation import (
 __all__ = [
     "DEFAULT_FLUSH_TIMEOUT",
     "DEFAULT_LIMITS",
+    "DEFAULT_MAX_CATCHUP_TICKS",
     "DEFAULT_TICK_RATE",
     "FATAL_FRAME_CODES",
+    "FIELD_ORDER",
+    "LOGGER_NAME",
     "GameSession",
     "IllegalActionError",
     "LoopbackStream",
@@ -80,14 +85,18 @@ __all__ = [
     "SessionServer",
     "TcpStream",
     "TickClock",
+    "UntranslatableEventError",
     "commands_for",
+    "content_label",
     "content_ref_for",
     "grid_rows",
+    "log_event",
     "loopback_pair",
     "protocol_event",
     "protocol_events",
     "rules_digest",
     "serve_tcp",
+    "session_logger",
     "snapshot_of",
     "stage_from_level",
 ]
