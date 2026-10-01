@@ -186,17 +186,19 @@ way the client's are:
 BATTLE_CITY_REFRESH_CAPTURES=1 uv run --locked pytest tests/tools/test_editor_screenshots.py
 ```
 
-**The same residual risk applies, stated plainly.** `tests/tools` cannot release pygame
-after its last test the way `tests/client` does, because that needs a `conftest.py` and
-the repository's `mypy packages tests` rejects a second module by that name. Collection
-is unaffected — nothing there imports pygame until a test calls for it — so every
-invocation the project actually uses passes: `make ci`, `pytest`, `pytest tests`,
-`pytest tests/tools`, `pytest tests/sim tests/tools`, `pytest tests/tools tests/client`.
-One deliberate ordering still fails, exactly as `pytest tests/sim tests/client` does:
+`tests/tools` has no `conftest.py`, because the repository's `mypy packages tests`
+rejects a second module by that name and `tests/client` already has one. It still puts
+the interpreter back: `tools_helpers.pygame_module_boundary` is a module-scoped autouse
+fixture that each pygame-using test module imports by name, and it shuts pygame down and
+drops it — together with the client modules that import it — once that module's last test
+has run. Releasing per module rather than once at the end makes it independent of
+collection order and of any `-k` filter, so no ordering carries a loaded display library
+into `tests/sim/test_purity.py`:
 
 ```sh
-uv run --locked pytest tests/tools tests/sim   # fails: the purity test runs after pygame loaded
+uv run --locked pytest tests/tools tests/sim   # passes
+uv run --locked pytest tests/sim tests/tools   # passes
 ```
 
-The cure is the same one: assert the simulation's import purity in a subprocess, which
-means editing `tests/sim`. Tracked as issue #22.
+Collection is clean on its own: nothing under `tests/tools` imports pygame until a test
+asks for it.

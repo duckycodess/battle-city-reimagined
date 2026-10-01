@@ -150,6 +150,25 @@ class EditorDocument:
         reloaded.path = self.path
         return reloaded
 
+    def rename(self, *, level_id: str | None = None, name: str | None = None) -> bool:
+        """Restate the identity. Returns whether anything changed.
+
+        The content specification calls a rename a new identifier rather than an edit, so
+        this is as much an unsaved change as painting a cell is: a document renamed and
+        then closed has lost work exactly the way a document painted and then closed has.
+        Restating the value a document already carries changes nothing and marks nothing.
+        """
+        changed = False
+        if level_id is not None and level_id != self.level_id:
+            self.level_id = level_id
+            changed = True
+        if name is not None and name != self.name:
+            self.name = name
+            changed = True
+        if changed:
+            self.dirty = True
+        return changed
+
     # -- grid ------------------------------------------------------------------
 
     @property

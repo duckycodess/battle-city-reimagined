@@ -19,13 +19,14 @@ repository type-checks with ``mypy packages tests``, which rejects two modules b
 package. That configuration belongs to the integration issue that owns the root
 manifests, so this directory keeps the bootstrap in an ordinary module instead.
 
-What that costs is one hook: these tests cannot drop pygame again once the last of them
-has run, the way ``tests/client`` does. It costs nothing for any invocation the project
-uses, because collection loads no pygame and a whole-suite run reaches ``tests/sim``
-before anything here. It does leave ``pytest tests/tools tests/sim`` failing the
-simulation's import-purity check, in the same way and for the same reason that
-``pytest tests/sim tests/client`` already does; the real fix is to assert that purity in
-a subprocess, which means editing ``tests/sim``, and is tracked as issue #22.
+**Pygame is released at every module boundary.** Without a conftest there is no
+directory-wide teardown, so :func:`pygame_module_boundary` is a module-scoped autouse
+fixture that each pygame-using test module imports by name. When that module's last test
+finishes, :func:`release_pygame` shuts pygame down and drops it from ``sys.modules``
+again, so no ordering of test directories can carry a loaded display library into
+``tests/sim/test_purity.py`` -- ``pytest tests/tools tests/sim`` passes as well as
+``pytest tests/sim tests/tools``. Doing it per module rather than once at the end is what
+makes it independent of collection order and of any ``-k`` filter.
 """
 
 from __future__ import annotations
@@ -35,10 +36,12 @@ import os
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 os.environ["SDL_AUDIODRIVER"] = "dummy"
 
-from collections.abc import Mapping, Sequence  # noqa: E402
+import sys  # noqa: E402
+from collections.abc import Iterator, Mapping, Sequence  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
+import pytest  # noqa: E402
 from battle_city_content import (  # noqa: E402
     CLASSIC_GRID_SIZE,
     GridCell,
@@ -172,6 +175,51 @@ def ensure_display() -> None:
 
     if not pygame.display.get_init():
         pygame.display.init()
+
+
+def release_pygame() -> None:
+    """Shut pygame down and drop it, so the interpreter is as these tests found it.
+
+    ``tests/sim/test_purity.py`` asserts that no ``pygame`` module is present in
+    ``sys.modules``, as a proxy for "importing the simulation does not pull in a
+    display". These tests load pygame on purpose, so they put it back.
+
+    The client modules that import pygame are dropped with it. They hold a reference to
+    the module object being discarded, and a later re-import creates a new one; leaving
+    the old reference in place would have one half of the client driving a pygame that
+    has been shut down. Membership is decided by asking each loaded client module whether
+    it has a ``pygame`` attribute rather than by listing names, so a new module that
+    imports pygame is covered without anyone remembering to add it here. Modules that do
+    not touch pygame are deliberately kept: a test that imported a class from one at
+    collection time must keep comparing against that same class afterwards.
+    """
+    module = sys.modules.get("pygame")
+    if module is None:
+        return
+    if module.get_init():
+        module.quit()
+    stale = [
+        name
+        for name, loaded in sys.modules.items()
+        if name == "pygame"
+        or name.startswith("pygame.")
+        or (name.startswith("battle_city_client") and getattr(loaded, "pygame", None) is not None)
+    ]
+    for name in stale:
+        del sys.modules[name]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def pygame_module_boundary() -> Iterator[None]:
+    """Release pygame when the importing test module has finished.
+
+    Imported by name into every test module here that loads pygame. A module-scoped
+    autouse fixture is the only directory-wide teardown available without a
+    ``conftest.py``, and firing per module rather than once at the end makes it
+    independent of how the session was selected or ordered.
+    """
+    yield
+    release_pygame()
 
 
 def capture_directory(scratch: Path) -> Path:

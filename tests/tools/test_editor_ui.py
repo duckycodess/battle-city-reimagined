@@ -13,7 +13,11 @@ import tools_helpers  # noqa: F401  -- sets the SDL driver variables before anyt
 from battle_city_client.editor import layout
 from battle_city_client.editor.state import Tool
 from battle_city_content import GridCell, TileCode
-from tools_helpers import editor_app, observed
+from tools_helpers import (
+    editor_app,
+    observed,
+    pygame_module_boundary,  # noqa: F401  -- autouse: releases pygame when this module ends
+)
 
 SCALE = 3
 

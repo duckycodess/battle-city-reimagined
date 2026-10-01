@@ -31,6 +31,7 @@ from tools_helpers import (
     capture_directory,
     capture_editor,
     ensure_display,
+    pygame_module_boundary,  # noqa: F401  -- autouse: releases pygame when this module ends
 )
 
 CLASSIC_01 = BUNDLED_ROOT / "levels" / "classic-01.json"

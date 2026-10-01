@@ -217,10 +217,7 @@ def open_state(options: argparse.Namespace) -> EditorState:
         document = EditorDocument.open(options.level)
     else:
         document = EditorDocument.blank()
-    if options.level_id is not None:
-        document.level_id = options.level_id
-    if options.name is not None:
-        document.name = options.name
+    document.rename(level_id=options.level_id, name=options.name)
     document.path = options.output
     return EditorState(document=document, overwrite=options.overwrite)
 

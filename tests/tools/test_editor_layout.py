@@ -6,6 +6,9 @@ import pytest
 import tools_helpers  # noqa: F401  -- sets the SDL driver variables before anything else
 from battle_city_client.editor import layout
 from battle_city_content import CLASSIC_GRID_SIZE, GridCell, TileCode
+from tools_helpers import (
+    pygame_module_boundary,  # noqa: F401  -- autouse: releases pygame when this module ends
+)
 
 
 def test_the_palette_is_the_whole_tile_vocabulary() -> None:

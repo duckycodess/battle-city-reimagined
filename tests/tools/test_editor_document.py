@@ -44,6 +44,24 @@ def test_opening_an_unloadable_file_is_refused(tmp_path: Path) -> None:
         EditorDocument.open(broken)
 
 
+def test_renaming_is_an_edit_and_restating_the_same_name_is_not() -> None:
+    """Identity is content: a new identifier is a change the document must remember."""
+    document = EditorDocument.blank(level_id="before", name="Before")
+    assert document.rename(level_id="before", name="Before") is False
+    assert observed(document.dirty) is False
+
+    assert document.rename(name="After") is True
+    assert observed(document.dirty) is True
+    assert document.level_id == "before"
+    assert document.name == "After"
+
+
+def test_renaming_nothing_is_a_no_op() -> None:
+    document = EditorDocument.blank()
+    assert document.rename() is False
+    assert document.dirty is False
+
+
 def test_painting_marks_the_document_dirty_only_when_it_changes() -> None:
     document = EditorDocument.blank()
     assert document.paint(GridCell(2, 2), TileCode.EMPTY) is False

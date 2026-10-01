@@ -8,7 +8,11 @@ import pytest
 import tools_helpers  # noqa: F401  -- sets the SDL driver variables before anything else
 from battle_city_client.editor.document import BUNDLED_ROOT
 from battle_city_content import TileCode
-from tools_helpers import ensure_display
+from tools_helpers import (
+    ensure_display,
+    observed,
+    pygame_module_boundary,  # noqa: F401  -- autouse: releases pygame when this module ends
+)
 
 CLASSIC_01 = BUNDLED_ROOT / "levels" / "classic-01.json"
 
@@ -63,6 +67,38 @@ def test_identity_can_be_restated_which_is_how_a_level_is_renamed() -> None:
     assert state.document.level_id == "my-fork"
     assert state.document.name == "My Fork"
     assert state.document.source is not None
+
+
+def test_a_rename_on_the_command_line_is_unsaved_work() -> None:
+    """A document renamed and then closed has lost work, so closing must say so."""
+    from battle_city_client.editor.app import open_state, parse_args
+
+    state = open_state(parse_args(["--level", str(CLASSIC_01), "--id", "my-fork"]))
+    assert state.document.dirty is True
+
+    state.quit()
+    assert observed(state.running) is True
+    assert "UNSAVED" in state.status
+    state.quit()
+    assert observed(state.running) is False
+
+
+def test_restating_the_identity_a_document_already_has_changes_nothing() -> None:
+    from battle_city_client.editor.app import open_state, parse_args
+
+    arguments = ["--level", str(CLASSIC_01), "--id", "classic-01", "--name", "Classic Stage 1"]
+    state = open_state(parse_args(arguments))
+    assert state.document.dirty is False
+    state.quit()
+    assert state.running is False
+
+
+def test_a_blank_level_named_on_the_command_line_is_unsaved_work() -> None:
+    """A fresh document is clean; naming it is the first edit made to it."""
+    from battle_city_client.editor.app import open_state, parse_args
+
+    assert open_state(parse_args([])).document.dirty is False
+    assert open_state(parse_args(["--id", "my-level"])).document.dirty is True
 
 
 def test_an_unreadable_level_is_reported_as_a_sentence(
