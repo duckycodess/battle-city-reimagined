@@ -11,6 +11,7 @@ the AI side of that boundary.
 from __future__ import annotations
 
 import ast
+import subprocess
 import sys
 from pathlib import Path
 
@@ -96,5 +97,27 @@ def test_the_package_depends_on_no_project_package_but_the_simulation() -> None:
 
 
 def test_importing_the_package_does_not_pull_in_a_display_or_a_socket() -> None:
-    loaded = {name for name in sys.modules if name.startswith(("pygame", "pyxel"))}
-    assert not loaded, f"importing the AI package loaded {sorted(loaded)}"
+    """Import the package alone in a clean interpreter and report what came with it.
+
+    Asserted in a subprocess rather than against this process's ``sys.modules``, because
+    this process is not evidence of anything. pytest imports every selected test module
+    during collection, so a sibling suite that uses pygame puts it in ``sys.modules``
+    before the first test runs; ``tests/sim/test_purity.py`` makes the in-process claim
+    and ``tests/client/conftest.py`` spends a long docstring on the fact that it can only
+    paper over it for suites that sort after ``tests/client``. ``tests/ai`` sorts before
+    it, so the in-process form of this check asserted the collection order of the whole
+    repository and failed on a full run for a reason that had nothing to do with the AI
+    package. A fresh interpreter answers the question that was actually being asked.
+    """
+    script = (
+        "import sys;"
+        "import battle_city_ai;"
+        "print(sorted(n for n in sys.modules if n.startswith(('pygame', 'pyxel'))))"
+    )
+    loaded = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+    assert loaded == "[]", f"importing the AI package loaded {loaded}"
