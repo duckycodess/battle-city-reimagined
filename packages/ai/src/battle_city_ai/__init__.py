@@ -30,6 +30,40 @@ Three guarantees hold, and the tests in ``tests/ai`` assert each of them:
   ``max_projectiles_per_tank`` gate, or any other rule, and bots see concealed tanks
   exactly as the simulation's presentation-only concealment rule implies they should.
 
+Fairness limits
+---------------
+Stated here rather than implied, because "difficulty may not bypass the rules" is only
+meaningful if the list of things it may not bypass is written down.
+
+* **Inputs.** A bot emits only ``MoveCommand`` and ``FireCommand``, at most one of each
+  per tick, naming its own live tank. It never respawns itself, never spawns an enemy or
+  a powerup, and never drives a tank it was not created for.
+* **Collision.** Movement is predicted with the engine's own pixel arithmetic, so a bot
+  plans around exactly the obstacles a player faces and gains nothing from predicting.
+* **Rate.** Firing is gated on ``rules.max_projectiles_per_tank`` exactly as
+  ``step`` gates it, and then again on the profile's ``fire_cooldown_ticks``, which is
+  stricter than the rules alone and exists because the rules alone would permit a cadence
+  no input device can produce.
+* **Accuracy.** Aim tolerance is capped at the widest misalignment the engine's geometry
+  can still convert, and the remaining error is a declined shot, never a shot that bends.
+* **Knowledge.** A bot reads the public snapshot. It sees concealed tanks, because
+  concealment is presentation-only until a proposal says otherwise, and it does not see
+  anything a renderer could not also derive from the same state.
+* **Base.** A bot never fires at the home base. A line that reaches the base tile is
+  reported as reaching nothing, so no profile can decide to end a run on its own.
+* **Coordination.** None. Bots do not share information or divide targets; the AI
+  specification defers team play to a proposal with its own fairness criteria.
+
+Performance limits
+------------------
+One decision costs: one pass over the hostiles to pick a target, at most two firing-line
+traces bounded by the playfield's diagonal, at most four roaming probes and two dodge
+probes of ``planning_horizon_ticks`` steps each, and one bounded trace per live
+projectile. Nothing is cached between ticks and a bot's whole memory is six fields, three
+of them counters that saturate at a profile bound, so cost per tick is flat over the
+length of a run. The only term that grows with the scene is the per-projectile threat
+trace, which a stage's own ``max_projectiles_per_tank`` budget already bounds.
+
 Read :mod:`battle_city_ai.profiles` for the knobs, :mod:`battle_city_ai.perception` for
 what a bot may know, :mod:`battle_city_ai.policy` for how it decides, and
 :mod:`battle_city_ai.seeding` for where its randomness comes from.
