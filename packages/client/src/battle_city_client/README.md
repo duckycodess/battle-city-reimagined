@@ -133,3 +133,70 @@ invocation the project actually uses passes — `make ci`, `pytest`, `pytest tes
 tests/sim/test_purity.py`, and `-k` selections. The check is only genuinely testable in a
 subprocess that imports `battle_city_sim` alone, which means editing `tests/sim`.
 Tracked as issue #22.
+
+## The level editor
+
+`battle_city_client.editor` is a separate program in the same package: a 16x16 grid
+editor over the declarative content format, with its own logical frame, its own window
+and no simulation at all.
+
+```sh
+uv run --locked --package battle-city-client python -m battle_city_client.editor \
+  --level packages/content/src/battle_city_content/levels/classic-01.json \
+  --output /tmp/my-level.json
+```
+
+| Action                      | Input                     |
+| --------------------------- | ------------------------- |
+| Apply the tool to a cell    | Left click, or drag       |
+| Select a tile               | Click a swatch, or `0`-`8` |
+| Paint / player / enemy / delete | `B` / `P` / `E` / `X` |
+| Next player slot            | `TAB`                     |
+| Validate                    | `V`                       |
+| Save to `--output`          | `S`                       |
+| Re-read the opened file     | `R`                       |
+| Window scale                | `-` and `+`               |
+| Quit                        | `ESC`; an edited document asks twice |
+
+`--output` is what makes a save possible and it is never inferred: an editor that wrote
+back over whatever it opened would be one keystroke from destroying a bundled stage. An
+existing target also needs `--overwrite`, and the packaged content root is refused either
+way. Nothing is written until the document has passed `battle_city_content.load_level`,
+and the write is atomic.
+
+### Why it does not use `battle_city_tools`
+
+The architecture specification allows `client → sim, content, protocol`; it does not
+allow `client → tools`, and the client manifest declares no such dependency. The editor
+therefore keeps a small document model of its own in `editor/document.py` instead of
+importing `battle_city_tools.LevelDraft`, and that duplication is written down there
+rather than hidden. It is bounded: both models hold the same five things, and neither
+copies a *validation rule* — both ask the content loader. The editor, the headless tools
+and the game cannot disagree about what a valid level is.
+
+### Tests and captures
+
+The editor's tests live under `tests/tools`, beside the headless tools they are the
+counterpart to, because this issue does not own `tests/client`. That directory
+deliberately has no `conftest.py` and imports pygame only inside the functions that need
+it; `tests/tools/tools_helpers.py` records why. Screen captures are refreshed the same
+way the client's are:
+
+```sh
+BATTLE_CITY_REFRESH_CAPTURES=1 uv run --locked pytest tests/tools/test_editor_screenshots.py
+```
+
+**The same residual risk applies, stated plainly.** `tests/tools` cannot release pygame
+after its last test the way `tests/client` does, because that needs a `conftest.py` and
+the repository's `mypy packages tests` rejects a second module by that name. Collection
+is unaffected — nothing there imports pygame until a test calls for it — so every
+invocation the project actually uses passes: `make ci`, `pytest`, `pytest tests`,
+`pytest tests/tools`, `pytest tests/sim tests/tools`, `pytest tests/tools tests/client`.
+One deliberate ordering still fails, exactly as `pytest tests/sim tests/client` does:
+
+```sh
+uv run --locked pytest tests/tools tests/sim   # fails: the purity test runs after pygame loaded
+```
+
+The cure is the same one: assert the simulation's import purity in a subprocess, which
+means editing `tests/sim`. Tracked as issue #22.

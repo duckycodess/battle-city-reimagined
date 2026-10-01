@@ -17,9 +17,15 @@ the functions that use it, through :func:`ensure_display` and the capture helper
 repository type-checks with ``mypy packages tests``, which rejects two modules both named
 ``conftest`` unless the root configuration excludes one or the test tree becomes a
 package. That configuration belongs to the integration issue that owns the root
-manifests, so this directory keeps the bootstrap in an ordinary module instead. Nothing
-is lost: with no module-scope pygame import there is nothing to tidy up after, and in a
-whole-suite run these tests sort after ``tests/sim`` anyway.
+manifests, so this directory keeps the bootstrap in an ordinary module instead.
+
+What that costs is one hook: these tests cannot drop pygame again once the last of them
+has run, the way ``tests/client`` does. It costs nothing for any invocation the project
+uses, because collection loads no pygame and a whole-suite run reaches ``tests/sim``
+before anything here. It does leave ``pytest tests/tools tests/sim`` failing the
+simulation's import-purity check, in the same way and for the same reason that
+``pytest tests/sim tests/client`` already does; the real fix is to assert that purity in
+a subprocess, which means editing ``tests/sim``, and is tracked as issue #22.
 """
 
 from __future__ import annotations
@@ -179,3 +185,40 @@ def capture_directory(scratch: Path) -> Path:
             uv run --locked pytest tests/tools/test_editor_screenshots.py
     """
     return SCREENSHOT_DIR if os.environ.get(REFRESH_CAPTURES_ENV) == "1" else scratch
+
+
+# -- the editor, built only when a test asks for it ---------------------------
+
+
+def editor_app(document: Any = None, *, scale: int = 3, overwrite: bool = False) -> Any:
+    """An editor over ``document``, with a dummy window at ``scale``.
+
+    Imported here rather than at module scope: these imports pull in pygame, and the
+    rule for this directory is that collection must not.
+    """
+    ensure_display()
+    from battle_city_client.editor.app import build_app
+    from battle_city_client.editor.document import EditorDocument
+    from battle_city_client.editor.state import EditorState
+
+    state = EditorState(document=document or EditorDocument.blank(), overwrite=overwrite)
+    return build_app(state, scale=scale)
+
+
+def capture_editor(state: Any, name: str, *, directory: Path, scale: int = 2) -> Path:
+    """Render ``state`` into a PNG under ``directory`` and return the path."""
+    ensure_display()
+    import pygame
+    from battle_city_client.assets import ProceduralAssetLibrary
+    from battle_city_client.editor import layout
+    from battle_city_client.editor.render import EditorRenderer
+
+    directory.mkdir(parents=True, exist_ok=True)
+    surface = pygame.Surface(layout.LOGICAL_SIZE)
+    EditorRenderer(ProceduralAssetLibrary()).render(surface, state)
+    scaled = pygame.transform.scale(
+        surface, (layout.LOGICAL_SIZE[0] * scale, layout.LOGICAL_SIZE[1] * scale)
+    )
+    path = directory / f"{name}.png"
+    pygame.image.save(scaled, str(path))
+    return path
