@@ -139,6 +139,28 @@ class StageSession:
             commands.append(FireCommand(tank_id=tank.entity_id))
         return tuple(commands)
 
+    def stepped(self, commands: tuple[Command, ...]) -> StageSession:
+        """Advance exactly one tick with ``commands``, whoever decided them.
+
+        The seam a campaign needs. :meth:`advance` drives a stage from the local player's
+        intent alone, which is all a free-standing run needs; a campaign also has enemy
+        spawns and enemy commands to submit, and they belong in the same tick input as the
+        player's, because the simulation validates a tick as a whole and applies none of it
+        if any part is illegal.
+
+        Deciding *what* those commands are stays outside this class. This method adds no
+        rule: it is the one-tick form of :meth:`advance`, and ``last_events`` holds that
+        tick's events alone.
+        """
+        if self.state.finished:
+            return replace(self, last_events=())
+        result = step(
+            self.state,
+            TickInput.from_iterable(self.state.tick, commands),
+            self.rules,
+        )
+        return replace(self, state=result.state, last_events=result.events)
+
     def advance(self, ticks: int, intent: PlayerIntent = IDLE_INTENT) -> StageSession:
         """Advance ``ticks`` ticks, holding ``intent`` for each of them.
 
@@ -153,13 +175,8 @@ class StageSession:
         for _ in range(ticks):
             if session.state.finished:
                 break
-            result = step(
-                session.state,
-                TickInput.from_iterable(session.state.tick, session.commands_for(intent)),
-                session.rules,
-            )
-            events.extend(result.events)
-            session = replace(session, state=result.state)
+            session = session.stepped(session.commands_for(intent))
+            events.extend(session.last_events)
         return replace(session, last_events=tuple(events))
 
     def _respawn_commands(self) -> tuple[Command, ...]:

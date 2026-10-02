@@ -45,18 +45,40 @@ Movement, firing, brick and cracked-brick damage, mirror reflection, water, fore
 and the home base are all the simulation's, driven at a fixed 60 ticks per second
 independently of how fast the window redraws.
 
-There are **no enemies, no waves and no stage victory**. The simulation ships no enemy
-steering and no wave cadence -- enemy tanks are actors that move only when commanded --
-and the product specification defers wave pacing and win-state timing to an accepted
-gameplay proposal. Adding either in the client would put game rules in the presentation
-layer, so the client does not. Enemy behaviour arrives with the AI phase and campaign
-rules with the campaign phase.
+The campaign is `battle_city_client.campaign`, and it is pygame-free: enemy quota per
+stage, one enemy on tick 0 and every 600 ticks after, score summed from the simulation's
+own `ScoreAwarded` events, lives carried between stages, the stage-clear condition, a
+campaign that can be completed, and what a restart rewinds. The values are the historical
+runtime's; the two places v1 departs from it — a reachable win, and a score cleared on
+restart — are argued in `openspec/changes/campaign-v1/design.md` and recorded in the
+product specification.
 
-The two outcomes the simulation can record, `BASE_DESTROYED` and `PLAYERS_ELIMINATED`,
-both need a hostile projectile, so no live run can reach one yet. The terminal screen is
-still implemented and still tested: `tests/client` assembles a finished state and renders
-it. Every such capture is labelled a test fixture. The client itself never sets an
-outcome; it only reads one.
+**The enemies this build spawns hold position and never fire.** That is a real limitation
+and not a placeholder. Steering is `battle_city_ai`'s, the architecture specification
+allows `client → sim, content, protocol` and not `client → ai`, and this package's
+manifest declares no dependency on the AI package — so the campaign takes an injected
+`EnemyCommandDriver` and the client injects `IdleEnemyDriver`, which commands nobody.
+`tests/campaign` injects a driver backed by the AI package, which is how the seam is shown
+to carry a real bot. Wiring one into the shipped client is issue #35.
+
+A stage is therefore cleared by destroying its quota, the campaign can be completed, and
+the HUD's score and lives are real. What cannot happen in this build is losing: both
+failure outcomes need a hostile projectile, a friendly shot at the base is absorbed like
+stone, and nothing on the board fires at the player. The terminal screen is still
+implemented and still tested — `tests/client` assembles a finished state and renders it,
+and `tests/campaign` drives a real loss with an AI-backed driver. Every capture taken from
+an assembled state is labelled a test fixture. The client itself never sets an outcome; it
+only reads one.
+
+## Campaign and free play
+
+There is one mode. Choosing a stage starts the campaign *at that stage*, with the
+starting lives and a score of zero: there is no saved progress, so the stage list is also
+the checkpoint. Pausing offers `RESTART STAGE`, which replays the stage from the score and
+lives it began with. The screen shown when a run stops — a stage cleared, the campaign
+completed, or a loss — is one overlay whose wording and menu come from the campaign phase.
+Giving a stage clear and a campaign completion their own `Screen` members is issue #36;
+`tests/client` asserts the current member list and is outside the campaign issue's files.
 
 ## Replacing the art
 

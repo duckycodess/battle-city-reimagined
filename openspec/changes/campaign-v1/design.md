@@ -243,6 +243,9 @@ continues to assert.
 `advance` is reimplemented on top of it and behaves identically. This is what lets the
 campaign add spawn and enemy commands to the player's own without duplicating the session.
 
+`CampaignRun.with_session(session) -> CampaignRun` adopts a session decided outside the
+campaign and re-derives the phase from it; see "Compatibility and migration".
+
 ## Compatibility and migration
 
 - **Content.** No schema change, no level file change. A level that declares no `waves`
@@ -256,8 +259,21 @@ campaign add spawn and enemy commands to the player's own without duplicating th
   must *not* persist the generator position alone, because a restored stage is replayed
   from its derived seed.
 - **Client API.** Additive. `ClientShell` gains a `campaign` field and keeps `session`
-  pointing at the live session, so existing readers — including `tests/client` — are
+  pointing at the live session, so existing *readers* — including `tests/client` — are
   unaffected.
+
+  `session` is also *written* from outside, which the first draft of this design missed
+  and which `tests/client/test_client_smoke.py` relies on: `_end_the_run_in_place`
+  assembles a finished state and assigns it to `shell.session`, because no live run in
+  this build can reach an outcome on its own. A campaign that overwrote `session` with its
+  own on every `advance` would discard that assignment, and would discard it even on a
+  frame worth zero ticks, so three smoke tests would fail. The contract is therefore
+  stated rather than assumed: **`ClientShell.session` is read-write, and a running
+  campaign adopts what is there before it advances.** `CampaignRun.with_session(session)`
+  is that adoption — it takes the session as given and re-derives the phase from it, the
+  same derivation a tick the campaign ran itself goes through (D7). Identity is the test,
+  so the ordinary hand-back costs nothing, and adoption rewrites no other field: the
+  quota, the cadence and the generator belong to the stage, not to the state.
 
 ## Balance and safety
 
