@@ -15,6 +15,7 @@ saying so.
 from __future__ import annotations
 
 import ast
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -349,5 +350,70 @@ def test_the_blender_readme_does_not_claim_the_scene_file_is_reproducible() -> N
 # --------------------------------------------------------------------------------------
 
 
+MARKER = "probe-result:"
+"""A prefix, because pygame prints a banner to stdout the moment it is imported.
+
+The negative control below caught this: a probe that read the whole of stdout saw
+``pygame-ce 2.5.8 (SDL ...)`` ahead of its own answer and compared unequal. Tagging the
+line the probe actually cares about makes the reading independent of whatever an imported
+module decides to announce.
+"""
+
+
+def _probe(source: str) -> str:
+    """Run ``source`` in a fresh interpreter and return its tagged line."""
+    result = subprocess.run(
+        [sys.executable, "-c", source], capture_output=True, text=True, check=True
+    )
+    for line in result.stdout.splitlines():
+        if line.startswith(MARKER):
+            return line[len(MARKER) :].strip()
+    raise AssertionError(f"the probe printed no {MARKER!r} line; stdout was {result.stdout!r}")
+
+
 def test_the_asset_tools_pull_in_no_display_library() -> None:
-    assert not [name for name in sys.modules if name.split(".")[0] in {"pygame", "bpy"}]
+    """Import the package in a fresh interpreter and look at *its* ``sys.modules``.
+
+    The obvious version of this test reads this process's ``sys.modules`` directly. That
+    does not work, and the way it fails is silent. pytest imports every selected test
+    module during collection, before the first test runs, so a full-suite run has already
+    imported ``tests/client`` -- and pygame with it -- by the time anything here executes.
+    ``tests/assets`` sorts before ``tests/client``, so the teardown in that package's
+    conftest which drops pygame again has not run yet either. Run on its own the
+    in-process check passed and looked meaningful; run under ``make ci`` it failed, and it
+    could only ever have been reporting on its neighbours rather than on this package.
+
+    ``tests/client/conftest.py`` already works through exactly this problem for
+    ``tests/sim/test_purity.py`` and reaches the same conclusion: the claim is only really
+    testable in a subprocess that imports the package alone. This package can do that from
+    inside its own allowed files, so it does.
+
+    What is being asserted is a boundary that matters: the validator has to run in
+    continuous integration on a machine with no GPU, no display and no Blender, so
+    importing it must not reach for either.
+    """
+    probe = (
+        "import sys\n"
+        "import battle_city_tools.assets\n"
+        "import battle_city_tools.assets.cli\n"
+        "roots = {name.split('.')[0] for name in sys.modules}\n"
+        f"print('{MARKER}' + ','.join(sorted(roots & {{'pygame', 'bpy'}})))\n"
+    )
+    leaked = _probe(probe)
+    assert leaked == "", f"importing the asset tools pulled in {leaked}"
+
+
+def test_the_probe_would_notice_a_display_library() -> None:
+    """A negative control, because the test above asserts that nothing happened.
+
+    An assertion that a set is empty passes just as well when the measurement is broken,
+    so prove the measurement can fail: a probe that does import pygame must report it.
+    Without this, a typo in the module name would read as a clean boundary forever.
+    """
+    probe = (
+        "import sys\n"
+        "import pygame\n"
+        "roots = {name.split('.')[0] for name in sys.modules}\n"
+        f"print('{MARKER}' + ','.join(sorted(roots & {{'pygame', 'bpy'}})))\n"
+    )
+    assert _probe(probe) == "pygame"
