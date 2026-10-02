@@ -37,7 +37,9 @@ neither Blender nor an image library: it is standard library plus `battle_city_c
 
 To check reproducibility, run step 2 twice into two directories, run step 3 into two
 scratch directories, and compare. See "What is and is not reproducible" below for what to
-expect.
+expect. Note that step 3 refuses a render directory holding anything the current catalogue
+did not render, so render into an empty directory rather than over an old one -- that is
+the check that stops a renamed sprite's stale file from being mistaken for a current one.
 
 ## The environment this pack was rendered in
 
@@ -113,6 +115,18 @@ from two independently built `.blend` files and packing both produced byte-ident
 two runs' PNG `IDAT` streams were also byte-identical for all 44 frames; Cycles was exactly
 deterministic here.
 
+This was re-run end to end during review, on the environment recorded above: two scene
+builds, two renders, two packs. All four tracked outputs came back byte-identical to each
+other **and to the files checked in here**, all 44 `IDAT` streams matched across the two
+renders, and all 44 render files differed as files. So the checked-in artifacts are
+reproducible from the scripts in this directory, not merely self-consistent.
+
+One honest limit on that claim: it is one machine, one Blender build, one CPU. Cycles
+being bit-exact across two runs on the same host does not establish that it is bit-exact
+across hosts, and nothing in this repository depends on it being so -- continuous
+integration never renders, and the sidecar's digests are over pixels the packer produced,
+not over anything Blender wrote to disk.
+
 **Not reproducible: Blender's intermediate PNG files as files.** Those 44 renders differ
 between runs anyway, because Blender stamps `tEXt` chunks holding the output path, the
 date and the render time. This is why nothing downstream trusts a file hash of a render.
@@ -152,3 +166,13 @@ on its owner's behalf, matching the bundled content pack's stance.
   client is its `AssetLibrary` protocol, which this change may not touch.
   `assets/sprites/starter/stage-composite.png` is a labelled pipeline composite and says so
   in its own pixels; it is not a screenshot.
+* **No UI symbols.** The art pipeline specification lists UI symbols among the things the
+  pipeline renders, and this pack ships none. That is deliberate rather than overlooked:
+  this issue's goal names terrain, tanks, the base, projectiles, powerups and effects, and
+  a UI glyph set cannot be designed without the HUD that consumes it. The pipeline needs no
+  change to carry them -- a glyph is a cell in the scene and a line in the catalogue -- so
+  they belong to whichever issue builds the HUD.
+* **The thresholds under `readability` are this pack's own.** They are regression guards
+  measured off the shipped art, not minima any specification sets, and clearing them is
+  not a conformance claim against an accessibility standard. See
+  `../sprites/starter/README.md` and the module docstring in `catalog.py`.
