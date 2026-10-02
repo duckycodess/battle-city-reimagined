@@ -12,6 +12,8 @@ It also keeps the tests away from the client: nothing here imports pygame, and
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Final
 
@@ -32,9 +34,9 @@ from battle_city_tools.assets.metadata import (
     load,
 )
 from battle_city_tools.assets.palette import PALETTE, PALETTE_COLORS
-from battle_city_tools.assets.png import decode_png
-from battle_city_tools.assets.validation import ValidationReport
+from battle_city_tools.assets.png import decode_png, encode_png
 from battle_city_tools.assets.raster import Canvas, Image
+from battle_city_tools.assets.validation import ValidationReport
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 PACK_DIR: Final[Path] = REPO_ROOT / "assets" / "sprites" / "starter"
@@ -134,9 +136,7 @@ def synthetic_pack() -> tuple[AtlasMetadata, Image, dict[str, Image]]:
             )
             for placement in layout.placements
         ),
-        animations=(
-            AnimationRecord(name="cycle", frames=("alpha", "beta"), loop=True),
-        ),
+        animations=(AnimationRecord(name="cycle", frames=("alpha", "beta"), loop=True),),
         states={"synthetic.first": "alpha"},
         readability=ReadabilityRecord(
             luma_contrast=(),
@@ -152,3 +152,64 @@ def synthetic_pack() -> tuple[AtlasMetadata, Image, dict[str, Image]]:
 def problems_mentioning(report: ValidationReport, needle: str) -> list[str]:
     """Every problem in ``report`` whose text contains ``needle``."""
     return [str(problem) for problem in report.problems if needle in str(problem)]
+
+
+SYNTHETIC_SUPERSAMPLE: Final[int] = 4
+"""The supersample factor the synthetic render set declares, matching the real pipeline."""
+
+
+def write_synthetic_render_set(
+    frames_dir: Path, *, supersample: int = SYNTHETIC_SUPERSAMPLE
+) -> Path:
+    """Write a complete, catalogue-shaped render directory of made-up pixels.
+
+    ``build_pack`` refuses any frame set that is not exactly the catalogue's, so a test
+    that exercises it needs all of them. Rendering them would need Blender, which is the
+    one thing the packer is built not to require, so the pixels here are invented.
+
+    They are invented *deterministically*: each frame's content is derived from a digest
+    of its own name, so the set is a pure function of the catalogue. That is what makes
+    it usable as the input to a determinism test -- a second call writes the same bytes,
+    so a difference between two builds can only have come from the packer.
+
+    The pixels are deliberately not art and the frames carry no readability properties.
+    This fixture is for checking that the *packing* is reproducible and that the frames
+    directory is read strictly. The real art is checked against the real thresholds in
+    ``test_assets_checked_in``.
+    """
+    frame_width, frame_height = catalog.FRAME_SIZE
+    width, height = frame_width * supersample, frame_height * supersample
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    for name in catalog.FRAME_NAMES:
+        digest = hashlib.sha256(name.encode("utf-8")).digest()
+        canvas = Canvas(width, height)
+        for y in range(height):
+            for x in range(width):
+                index = digest[(x // supersample + y // supersample * 3) % len(digest)]
+                colour = PALETTE_COLORS[index % len(PALETTE_COLORS)]
+                opaque = (x // supersample + y // supersample + digest[0]) % 5 != 0
+                canvas.set_pixel(x, y, (*colour, 255) if opaque else (0, 0, 0, 0))
+        (frames_dir / f"{name}.png").write_bytes(encode_png(canvas.freeze()))
+
+    manifest = {
+        "frames": list(catalog.FRAME_NAMES),
+        "render": synthetic_manifest_render(width, height),
+    }
+    path = frames_dir / "render.json"
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def synthetic_manifest_render(width: int, height: int) -> dict[str, RenderSetting]:
+    """The ``render`` block of a synthetic manifest: every Blender key, obviously fake.
+
+    The resolution keys have to be real integers because the packer derives the
+    supersample factor from them. Everything else is a placeholder, because the packer
+    copies the block into the sidecar without interpreting it.
+    """
+    from battle_city_tools.assets.build import BLENDER_KEYS
+
+    block: dict[str, RenderSetting] = {key: "synthetic" for key in BLENDER_KEYS}
+    block["render.resolution_x"] = width
+    block["render.resolution_y"] = height
+    return block

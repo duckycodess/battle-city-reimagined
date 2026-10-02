@@ -7,7 +7,8 @@ re-running it over unchanged renders rewrites identical bytes.
 
 The order is fixed and each step is small enough to state:
 
-1. read ``render.json`` and refuse a frame set that is not exactly the catalogue's
+1. read ``render.json`` and refuse a frame set that is not exactly the catalogue's,
+   including a directory carrying a render the current catalogue did not ask for
 2. decode each render, check it is the supersampled frame size, box it down with
    premultiplied coverage, snap coverage to binary and quantise to the palette
 3. pack by ascending name and composite the sheet
@@ -101,6 +102,7 @@ def build_pack(
 ) -> BuildReport:
     """Build the atlas, the sidecar, the contact sheet and the composite into ``output_dir``."""
     render = _read_manifest(frames_dir)
+    _check_no_strays(frames_dir)
     supersample = _supersample(render, frames_dir)
     images = _load_frames(frames_dir, supersample)
 
@@ -257,7 +259,9 @@ def _supersample(render: dict[str, RenderSetting], frames_dir: Path) -> int:
     width, height = render["render.resolution_x"], render["render.resolution_y"]
     frame_width, frame_height = catalog_module.FRAME_SIZE
     if not isinstance(width, int) or not isinstance(height, int) or width != height:
-        raise invalid(artifact, "render.resolution_x", "the render must be a square of whole pixels")
+        raise invalid(
+            artifact, "render.resolution_x", "the render must be a square of whole pixels"
+        )
     if width % frame_width or height % frame_height or width // frame_width < 1:
         raise invalid(
             artifact,
@@ -266,6 +270,34 @@ def _supersample(render: dict[str, RenderSetting], frames_dir: Path) -> int:
             f"{frame_width}x{frame_height} frame size",
         )
     return width // frame_width
+
+
+def _check_no_strays(frames_dir: Path) -> None:
+    """Refuse a render directory holding anything the render script did not write.
+
+    ``render_frames.py`` writes exactly one ``<frame name>.png`` per catalogue entry plus
+    ``render.json``. Anything else means the directory is not the output of one run of the
+    current catalogue, and the most likely cause is the one that silently produces wrong
+    art: a sprite was renamed, the directory was re-rendered without being emptied, and
+    the file under the old name is still sitting there. The manifest check cannot catch
+    that -- it lists the new names and matches -- and :func:`_load_frames` cannot either,
+    because it only ever opens the names it expects.
+
+    Refusing is the conservative half of the trade. The stray file is very probably
+    harmless, but a packer that ignores it cannot tell the author whether the renders it
+    just used came from one scene or two, and the whole point of this directory is that
+    the answer is knowable.
+    """
+    expected = {RENDER_MANIFEST} | {f"{name}.png" for name in catalog_module.FRAME_NAMES}
+    strays = sorted(entry.name for entry in frames_dir.iterdir() if entry.name not in expected)
+    if strays:
+        shown = ", ".join(strays[:5]) + (f", and {len(strays) - 5} more" if len(strays) > 5 else "")
+        raise invalid(
+            str(frames_dir),
+            "",
+            f"the render directory holds {len(strays)} file(s) this catalogue did not "
+            f"render: {shown}. Render into an empty directory",
+        )
 
 
 def _load_frames(frames_dir: Path, supersample: int) -> dict[str, Image]:
