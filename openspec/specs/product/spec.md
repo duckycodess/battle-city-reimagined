@@ -6,7 +6,9 @@ Rebuild the author's early Python Battle-City game as a maintainable tank-combat
 
 ## Core loop
 
-Players maneuver tanks through compact stages, use terrain and line of fire, destroy enemy tanks, collect temporary powerups, and protect a vulnerable home base. A stage is won when its required enemies are cleared while the base survives. A destroyed base ends the run. Exact scoring, wave pacing, and win-state timing belong to an accepted gameplay change proposal before implementation.
+Players maneuver tanks through compact stages, use terrain and line of fire, destroy enemy tanks, collect temporary powerups, and protect a vulnerable home base. A stage is won when its required enemies are cleared while the base survives. A destroyed base ends the run.
+
+Exact scoring, wave pacing, and win-state timing are accepted in the campaign-v1 gameplay change and recorded under "Campaign rules" below. Changing any of those values is a further proposal with compatibility notes, not an implementation decision.
 
 ## Classic foundation to preserve
 
@@ -37,6 +39,22 @@ Plan for:
 5. Replays and spectators using versioned input/state streams.
 
 Mode definitions must not fork core simulation rules. A mode supplies validated rules and content to the shared simulation.
+
+## Campaign rules
+
+Accepted in the campaign-v1 change. Values come from the historical runtime at revision `5c9d81cd0de89a05f5946448d19c40fb343b0a2d` except where a deviation is named.
+
+- **Score.** A run's score is the sum of the points the simulation reports: 50 for breaking a shielded enemy's shield, 100 for destroying a normal enemy, 200 for destroying an unshielded enemy. A shielded enemy is therefore worth 250 across its two hits. The simulation reports points and keeps no total; the campaign owns the total.
+- **Lives.** A campaign begins with three lives and carries the surviving count from one stage into the next. Losing the last life ends the run.
+- **Enemy quota.** A stage releases the sum of its declared waves, or, when it declares none, `5 + 2 * index` enemies for its zero-based position in the pack. The three classic stages release 5, 7 and 9.
+- **Spawn cadence.** One enemy enters on a stage's tick 0 and one every 600 ticks after the previous enemy entered, until the quota is spent. Spawn cell, facing and variant are drawn from a seeded campaign generator; spawned variants are normal and shielded, and unshielded is reached only by breaking a shield. A spawn whose cell is occupied retries rather than displacing a tank, and a blocked attempt does not spend the quota. There is no cap on concurrent enemies.
+- **Stage clear.** A stage is cleared when no enemies remain queued, no enemy tank is alive, and no projectile is in flight — including the player's own.
+- **Campaign victory.** Clearing the last stage of the pack completes the campaign. *Deviation:* the historical runtime's win state is unreachable, because clearing the final stage takes its `level <= max(level)` branch and leaves the run in a level-completed state forever. That is an incidental bug in an unreachable branch, not a rule.
+- **Game over.** The run ends when the simulation records an outcome: the base destroyed, or every life spent.
+- **Restart.** Restarting a stage replays it from the lives, score and seed it began with. Restarting a campaign returns to the first stage with the starting lives and a score of zero. *Deviation:* the historical restart reset the stage and the lives but not the score, so points accumulated across restarts; a run score that survives the run it measures is not a rule worth preserving.
+- **Checkpoint.** Until saved progress exists, the stage list is the checkpoint: a campaign may be started at any stage in the pack, with the starting lives and a score of zero.
+- **Enemy behaviour is not campaign behaviour.** The campaign spawns enemies and sets cadence; steering comes from an injected driver so a mode never contains bot logic. The shipped client injects an idle driver, so its spawned enemies hold position and do not fire. That limitation is stated in the client rather than hidden, and lifting it means giving the client a declared dependency on the AI package.
+- **Powerups.** The campaign spawns none. The historical runtime drew and collected powerups but never spawned one, so there is no source pacing to preserve; pacing needs its own proposal.
 
 ## Expansion
 
