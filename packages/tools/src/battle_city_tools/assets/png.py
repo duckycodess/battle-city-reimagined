@@ -109,6 +109,19 @@ def _decompress(idat: bytes, expected: int, origin: str) -> bytes:
 
     One byte past, rather than exactly ``expected``, so that a stream which is too long
     can be told apart from one that is exactly right and reported as its own problem.
+
+    Bounding the output means the completeness of the stream has to be asserted
+    separately, and in a specific order. ``decompressobj`` reports a truncated stream only
+    through ``eof``: cut the final adler-32 off a stream and it still returns every byte of
+    output it had, so a length check alone accepts it. Plain :func:`zlib.decompress` raised
+    on that case; this one has to ask. The three states are distinguished deliberately:
+
+    * more output than the header allows -- a declared size that does not match the data,
+      checked first because it is also ``eof``-false and deserves the clearer message;
+    * the stream never reached its end -- truncated, however much output it managed;
+    * bytes left over after the stream ended -- PNG defines the concatenated IDAT bodies
+      as exactly one zlib stream, so anything after it means the file is not what it says
+      it is. :func:`zlib.decompress` ignored this; it is refused here.
     """
     stream = zlib.decompressobj()
     try:
@@ -121,6 +134,20 @@ def _decompress(idat: bytes, expected: int, origin: str) -> bytes:
             "IDAT",
             f"the image data expands past the {expected} bytes the header declares; "
             "the rest was not inflated",
+        )
+    if not stream.eof:
+        raise invalid(
+            origin,
+            "IDAT",
+            "the compressed image data ends mid-stream; the file is truncated",
+        )
+    if stream.unused_data or stream.unconsumed_tail:
+        trailing = len(stream.unused_data) + len(stream.unconsumed_tail)
+        raise invalid(
+            origin,
+            "IDAT",
+            f"{trailing} byte(s) follow the end of the compressed image data, "
+            "which PNG defines as a single zlib stream",
         )
     return raw
 

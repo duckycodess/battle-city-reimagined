@@ -239,6 +239,80 @@ def test_a_stream_that_expands_past_the_declared_size_is_cut_off() -> None:
         decode_png(_png(1, 1, b"", idat=bomb))
 
 
+def _raw_rows(width: int, height: int) -> bytes:
+    """Filter-zero rows of known content, so a test can control the exact inflated size."""
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        for x in range(width):
+            raw += bytes(((x * 7) % 256, (y * 11) % 256, (x + y) % 256, 255))
+    return bytes(raw)
+
+
+def test_a_stream_cut_off_after_its_last_output_byte_is_refused() -> None:
+    """The case a length check alone cannot see.
+
+    Strip the trailing adler-32 from an otherwise complete stream. zlib still hands back
+    every byte of output it had, so the inflated length is *exactly* what the header
+    declares and nothing about the size looks wrong -- but the stream never reached its
+    end and the file is truncated. ``zlib.decompress`` raised on this; a bounded
+    ``decompressobj`` only reports it through ``eof``, so the reader has to ask.
+    """
+    raw = _raw_rows(4, 4)
+    complete = zlib.compress(raw, 9)
+    truncated = complete[:-4]
+    assert len(zlib.decompressobj().decompress(truncated, len(raw) + 1)) == len(raw)
+
+    with pytest.raises(AssetInvalid, match="ends mid-stream"):
+        decode_png(_png(4, 4, b"", idat=truncated))
+
+
+@pytest.mark.parametrize("missing", [1, 2, 4])
+def test_a_stream_missing_its_tail_is_refused_however_much_is_missing(missing: int) -> None:
+    raw = _raw_rows(4, 4)
+    with pytest.raises(AssetInvalid, match="ends mid-stream|damaged"):
+        decode_png(_png(4, 4, b"", idat=zlib.compress(raw, 9)[:-missing]))
+
+
+def test_bytes_after_the_end_of_the_stream_are_refused() -> None:
+    """PNG defines the concatenated IDAT bodies as exactly one zlib stream.
+
+    ``zlib.decompress`` ignored anything after the stream ended, so this is a tightening
+    rather than a restoration. A file carrying a second stream, or padding, in its image
+    data is not the file it claims to be, and silently decoding its first half hides that.
+    """
+    raw = _raw_rows(4, 4)
+    with pytest.raises(AssetInvalid, match="follow the end"):
+        decode_png(_png(4, 4, b"", idat=zlib.compress(raw, 9) + b"\x00" * 8))
+
+
+def test_a_second_zlib_stream_appended_to_the_image_data_is_refused() -> None:
+    raw = _raw_rows(4, 4)
+    doubled = zlib.compress(raw, 9) + zlib.compress(raw, 9)
+    with pytest.raises(AssetInvalid, match="follow the end"):
+        decode_png(_png(4, 4, b"", idat=doubled))
+
+
+def test_a_stream_one_byte_longer_than_declared_is_refused_as_too_long() -> None:
+    """One byte over, not a bomb: the smallest overrun must still be caught.
+
+    This also pins the ordering. An over-long stream is cut off at the cap, which leaves
+    ``eof`` false, so a reader that asked about completeness first would report this as
+    truncated -- the opposite of what is wrong with it.
+    """
+    raw = _raw_rows(4, 4) + b"\x00"
+    with pytest.raises(AssetInvalid, match="expands past"):
+        decode_png(_png(4, 4, b"", idat=zlib.compress(raw, 9)))
+
+
+def test_an_exactly_correct_stream_still_decodes() -> None:
+    """The positive control for all of the above."""
+    raw = _raw_rows(4, 4)
+    image = decode_png(_png(4, 4, b"", idat=zlib.compress(raw, 9)))
+    assert image.size == (4, 4)
+    assert image.pixel(3, 2) == (21, 22, 5, 255)
+
+
 def test_a_header_declaring_more_pixels_than_the_reader_allocates_for_is_refused() -> None:
     """PNG permits 2**31 - 1 on each axis; nothing here will allocate for that."""
     side = 1 << 16
