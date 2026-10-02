@@ -26,11 +26,29 @@ from assets_helpers import (
     COMPOSITE_PATH,
     PACK_DIR,
     PREVIEW_PATH,
+    REPO_ROOT,
     SIDECAR_PATH,
     shipped_atlas,
     shipped_metadata,
 )
-from battle_city_sim import DEFAULT_RULES
+
+try:
+    from battle_city_sim import DEFAULT_RULES
+except ModuleNotFoundError as error:  # pragma: no cover - an environment, not a behaviour
+    raise ModuleNotFoundError(
+        "battle_city_sim is not importable, so the checks that art cannot move collision "
+        "geometry cannot run.\n\n"
+        "This is a workspace setup problem and is not specific to the asset tests: "
+        "tests/ai, tests/client, tests/server, tests/sim and tests/tools import workspace "
+        "packages the same way and fail to collect in the same environment. Continuous "
+        "integration installs them before running pytest with\n\n"
+        "    uv sync --locked --all-packages --all-groups\n\n"
+        "and a local environment needs that command once. Skipping these checks instead "
+        "is not an option: they are the only thing asserting that the hitboxes this pack "
+        "ships are still battle_city_sim.DEFAULT_RULES, which is the contract the art "
+        "pipeline specification is most insistent about."
+    ) from error
+
 from battle_city_tools.assets import catalog
 from battle_city_tools.assets.composite import BANNER, BANNER_LINE
 from battle_city_tools.assets.palette import PALETTE, PALETTE_NAMES
@@ -97,8 +115,18 @@ def test_the_atlas_holds_every_catalogued_frame() -> None:
 
 def test_the_pack_covers_every_tile_kind_faction_direction_and_powerup() -> None:
     names = set(catalog.FRAME_NAMES)
-    for tile in ("empty", "stone", "brick", "brick-cracked", "mirror-ne", "mirror-se",
-                 "water-0", "forest", "home-intact", "home-destroyed"):
+    for tile in (
+        "empty",
+        "stone",
+        "brick",
+        "brick-cracked",
+        "mirror-ne",
+        "mirror-se",
+        "water-0",
+        "forest",
+        "home-intact",
+        "home-destroyed",
+    ):
         assert f"terrain-{tile}" in names
     for variant in ("player", "enemy-normal", "enemy-shielded", "enemy-unshielded"):
         for direction in ("up", "down", "left", "right"):
@@ -146,7 +174,8 @@ def test_projectile_art_overhangs_its_hitbox_and_says_so_with_a_pivot() -> None:
 
 
 def test_every_frame_in_the_atlas_is_one_tile_square() -> None:
-    assert catalog.FRAME_SIZE == (DEFAULT_RULES.tile_size, DEFAULT_RULES.tile_size)
+    tile = DEFAULT_RULES.tile_size
+    assert (tile, tile) == catalog.FRAME_SIZE
 
 
 # --------------------------------------------------------------------------------------
@@ -248,6 +277,66 @@ def test_the_blender_readme_records_the_version_the_pack_was_rendered_with() -> 
     render = shipped_metadata().render
     assert str(render["blender.version"]) in text
     assert str(render["blender.build_hash"]) in text
+
+
+# --------------------------------------------------------------------------------------
+# Source references resolve to files that are actually here
+# --------------------------------------------------------------------------------------
+
+
+def test_every_source_names_a_scene_and_scripts_that_exist_in_the_repository() -> None:
+    """A provenance record that names a file which is not here is a dangling claim.
+
+    The validator already checks that every frame's source identifier resolves inside the
+    sidecar and that each source carries authorship and a licence value. It deliberately
+    stops there: it is a pure function of metadata and pixels and has no repository root
+    to resolve a path against. That leaves the other half -- that the scene and the two
+    scripts a source names can actually be opened -- checkable only from here, where the
+    root is known. Without it the sidecar could promise reproducibility from a scene that
+    was deleted three commits ago.
+    """
+    for source in shipped_metadata().sources:
+        for field, reference in (
+            ("scene", source.scene),
+            ("build_script", source.build_script),
+            ("render_script", source.render_script),
+        ):
+            path = REPO_ROOT / reference
+            assert path.is_file(), (
+                f"source {source.source_id!r} names {field} {reference!r}, "
+                f"which is not a file in this repository"
+            )
+
+
+def test_source_references_are_repository_relative_and_inside_the_pipeline() -> None:
+    """Relative, so the record means the same thing in any checkout.
+
+    An absolute path would record one machine's directory layout, and a path climbing out
+    of ``assets/blender`` would point the provenance of this pack at something the pack
+    does not own.
+    """
+    for source in shipped_metadata().sources:
+        for reference in (source.scene, source.build_script, source.render_script):
+            assert not Path(reference).is_absolute(), reference
+            assert ".." not in Path(reference).parts, reference
+            assert reference.startswith("assets/blender/"), reference
+
+
+def test_the_sidecar_names_the_same_scene_and_scripts_the_catalogue_does() -> None:
+    """The files this test suite reads directly and the ones the sidecar advertises."""
+    for source in shipped_metadata().sources:
+        assert REPO_ROOT / source.scene == SCENE
+        assert REPO_ROOT / source.build_script == BUILD_SCRIPT
+        assert REPO_ROOT / source.render_script == RENDER_SCRIPT
+
+
+def test_every_declared_source_is_used_by_a_frame_and_every_frame_resolves() -> None:
+    """The shipped pack, not a fixture: no orphan provenance record, no dangling frame."""
+    metadata = shipped_metadata()
+    declared = {source.source_id for source in metadata.sources}
+    used = {frame.source_id for frame in metadata.frames}
+    assert used <= declared, sorted(used - declared)
+    assert declared == used, sorted(declared - used)
 
 
 def test_the_blender_readme_does_not_claim_the_scene_file_is_reproducible() -> None:
