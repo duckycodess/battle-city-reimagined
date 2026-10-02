@@ -8,6 +8,15 @@ accepts exactly what Blender is configured to write -- eight-bit, non-interlaced
 RGBA -- and rejects everything else by name. Guessing at a palette or a sixteen-bit
 channel would turn a configuration mistake into art that silently looks wrong.
 
+The reader treats its input as untrusted, because it is. ``build`` is pointed at a
+scratch directory that somebody else's Blender wrote, and a validator that runs in
+continuous integration decodes whatever is checked in. So it does two things a
+permissive reader skips: it verifies every chunk's CRC rather than assuming the bytes
+survived, and it never inflates more than the header says the image needs
+(:func:`_decompress`), with the declared size itself bounded by :data:`MAX_PIXELS`.
+Neither is about cryptography. They are about a corrupt file failing loudly at the byte
+that is wrong, instead of becoming subtly wrong pixels or an unbounded allocation.
+
 *Writing* is how checked-in bytes become a function of pixels. Every row is written with
 filter type ``0``, so the compressed stream depends on the image and the zlib level and
 on nothing else about the machine. Note the honest limit: zlib's output can still differ
@@ -37,6 +46,19 @@ _COLOR_TYPE_NAMES: Final[dict[int, str]] = {
 }
 _SUPPORTED_COLOR_TYPES: Final[dict[int, int]] = {2: 3, 6: 4}
 
+MAX_PIXELS: Final[int] = 1 << 26
+"""The largest image this reader will accept, as width times height.
+
+Not a PNG limit and not a specification limit: PNG allows either dimension up to
+2**31 - 1, which multiplies out to a declared size no machine can hold. This ceiling is
+what makes the declared size finite *before* anything is allocated, so :func:`_decompress`
+has a real bound to inflate against rather than an arbitrarily large one.
+
+Sixty-seven megapixels is 256 MiB of RGBA. The largest image this pipeline handles is the
+stage composite at well under a tenth of a megapixel, so the ceiling is three orders of
+magnitude of headroom from anything real, and is a backstop rather than a budget.
+"""
+
 
 def encode_png(image: Image, *, level: int = COMPRESSION_LEVEL) -> bytes:
     """Serialise ``image`` as an eight-bit RGBA PNG with no ancillary chunks."""
@@ -62,11 +84,8 @@ def decode_png(data: bytes, *, origin: str = "<bytes>") -> Image:
         raise invalid(origin, "", "not a PNG file: the eight-byte signature is missing")
     width, height, color_type, source_channels, idat = _read_chunks(data, origin)
     stride = width * source_channels
-    try:
-        raw = zlib.decompress(idat)
-    except zlib.error as error:
-        raise invalid(origin, "IDAT", f"the compressed image data is damaged: {error}") from error
     expected = (stride + 1) * height
+    raw = _decompress(idat, expected, origin)
     if len(raw) != expected:
         raise invalid(
             origin,
@@ -77,29 +96,88 @@ def decode_png(data: bytes, *, origin: str = "<bytes>") -> Image:
     return _unfilter(raw, width, height, source_channels, origin)
 
 
+def _decompress(idat: bytes, expected: int, origin: str) -> bytes:
+    """Inflate ``idat``, stopping one byte past what the header says the image needs.
+
+    A PNG header states the decompressed size before a single byte is inflated, so there
+    is never a reason to let zlib allocate past it. Inflating the whole stream and
+    checking the length afterwards hands a corrupt or hostile file an unbounded
+    allocation: a few hundred compressed bytes of zeros expand to gigabytes, and the
+    length check arrives after the memory is already gone. ``build`` is pointed at a
+    scratch directory written by a separate Blender process, so this is the ordinary
+    path, not only an adversarial one.
+
+    One byte past, rather than exactly ``expected``, so that a stream which is too long
+    can be told apart from one that is exactly right and reported as its own problem.
+    """
+    stream = zlib.decompressobj()
+    try:
+        raw = stream.decompress(idat, expected + 1)
+    except zlib.error as error:
+        raise invalid(origin, "IDAT", f"the compressed image data is damaged: {error}") from error
+    if len(raw) > expected:
+        raise invalid(
+            origin,
+            "IDAT",
+            f"the image data expands past the {expected} bytes the header declares; "
+            "the rest was not inflated",
+        )
+    return raw
+
+
 def _read_chunks(data: bytes, origin: str) -> tuple[int, int, int, int, bytes]:
     position = len(SIGNATURE)
     header: tuple[int, int, int, int] | None = None
     parts: list[bytes] = []
+    ended = False
     while position + 8 <= len(data):
         (length,) = struct.unpack(">I", data[position : position + 4])
         kind = data[position + 4 : position + 8]
+        name = kind.decode("ascii", "replace")
         body = data[position + 8 : position + 8 + length]
-        if len(body) != length:
-            raise invalid(origin, kind.decode("ascii", "replace"), "the chunk is truncated")
+        recorded = data[position + 8 + length : position + 12 + length]
+        if len(body) != length or len(recorded) != 4:
+            raise invalid(origin, name, "the chunk is truncated")
+        _check_crc(kind, body, recorded, name, origin)
         position += 12 + length
         if kind == b"IHDR":
             header = _read_header(body, origin)
         elif kind == b"IDAT":
             parts.append(body)
         elif kind == b"IEND":
+            ended = True
             break
+    if not ended:
+        raise invalid(origin, "IEND", "the file never reaches its end chunk; it is truncated")
     if header is None:
         raise invalid(origin, "IHDR", "the header chunk is missing")
     if not parts:
         raise invalid(origin, "IDAT", "the file carries no image data")
     width, height, color_type, channels = header
     return width, height, color_type, channels, b"".join(parts)
+
+
+def _check_crc(kind: bytes, body: bytes, recorded: bytes, name: str, origin: str) -> None:
+    """Refuse a chunk whose bytes do not hash to the checksum stored beside them.
+
+    PNG puts a CRC after every chunk and a reader that ignores it is choosing to decode
+    corruption into pixels. The pixel digests in the sidecar would eventually catch a
+    damaged atlas, but only as "the art changed" somewhere downstream; checked here it is
+    "this chunk is damaged", which is the thing that actually went wrong.
+
+    Ancillary chunks are checked too. Blender writes ``eXIf``, ``oFFs``, ``pHYs`` and a
+    row of ``tEXt`` records into every render and this reader skips their contents, but
+    skipping a chunk is not a reason to trust its length -- a bad CRC on one of them means
+    the file is damaged, and the IDAT that follows cannot be assumed intact either.
+    """
+    (stored,) = struct.unpack(">I", recorded)
+    actual = zlib.crc32(kind + body) & 0xFFFFFFFF
+    if stored != actual:
+        raise invalid(
+            origin,
+            name,
+            f"the chunk checksum is {stored:#010x} where its bytes hash to {actual:#010x}",
+        )
 
 
 def _read_header(body: bytes, origin: str) -> tuple[int, int, int, int]:
@@ -110,6 +188,13 @@ def _read_header(body: bytes, origin: str) -> tuple[int, int, int, int]:
     )
     if width <= 0 or height <= 0:
         raise invalid(origin, "IHDR", f"the image is {width}x{height}")
+    if width * height > MAX_PIXELS:
+        raise invalid(
+            origin,
+            "IHDR",
+            f"the header declares a {width}x{height} image, past the "
+            f"{MAX_PIXELS} pixel ceiling this reader will allocate for",
+        )
     if depth != 8:
         raise invalid(origin, "IHDR", f"only eight-bit channels are read, this file is {depth}-bit")
     if color_type not in _SUPPORTED_COLOR_TYPES:
@@ -180,4 +265,6 @@ def _paeth(left: int, above: int, upper_left: int) -> int:
 
 def _chunk(kind: bytes, body: bytes) -> bytes:
     payload = kind + body
-    return struct.pack(">I", len(body)) + payload + struct.pack(">I", zlib.crc32(payload) & 0xFFFFFFFF)
+    return (
+        struct.pack(">I", len(body)) + payload + struct.pack(">I", zlib.crc32(payload) & 0xFFFFFFFF)
+    )
