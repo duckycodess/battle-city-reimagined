@@ -168,7 +168,10 @@ class FrameRecord:
 
 @dataclass(frozen=True, slots=True)
 class AnimationRecord:
-    """A named sequence. No durations: see :class:`~battle_city_tools.assets.catalog.AnimationSpec`."""
+    """A named sequence, with no durations.
+
+    See :class:`~battle_city_tools.assets.catalog.AnimationSpec` for why timing is absent.
+    """
 
     name: str
     frames: tuple[str, ...]
@@ -414,14 +417,15 @@ def _read_palette(value: JsonValue, artifact: str) -> tuple[tuple[str, Rgb], ...
         channels = _array(block["rgb"], artifact, f"{field}.rgb")
         if len(channels) != 3:
             raise invalid(artifact, f"{field}.rgb", "a colour needs exactly three channels")
-        color = tuple(_channel(channel, artifact, f"{field}.rgb") for channel in channels)
+        red, green, blue = (_channel(channel, artifact, f"{field}.rgb") for channel in channels)
+        color = (red, green, blue)
         if name in seen_names:
             raise invalid(artifact, field, f"the palette name {name!r} appears twice")
         if color in seen_colors:
             raise invalid(artifact, field, f"the colour {list(color)} appears twice")
         seen_names.add(name)
         seen_colors.add(color)
-        palette.append((name, (color[0], color[1], color[2])))
+        palette.append((name, color))
     return tuple(palette)
 
 

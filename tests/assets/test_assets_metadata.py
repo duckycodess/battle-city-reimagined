@@ -18,7 +18,8 @@ from battle_city_tools.assets.metadata import SCHEMA_VERSION, load, serialize, t
 
 def _document() -> dict[str, Any]:
     metadata, _, _ = synthetic_pack()
-    return json.loads(serialize(metadata).decode("utf-8"))
+    document: dict[str, Any] = json.loads(serialize(metadata).decode("utf-8"))
+    return document
 
 
 def _reload(document: dict[str, Any]) -> None:

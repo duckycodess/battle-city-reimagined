@@ -21,8 +21,10 @@ iteration order of a set.
 
 *The sidecar can be checked, not just read.* Every claim it makes -- rectangles, pivots,
 palette membership, duplicate frames, source identifiers, and the readability thresholds
-that keep faction, mirror lean, cover and damage legible without colour -- is re-derived
-from the pixels by :mod:`~battle_city_tools.assets.validation`.
+that guard faction, mirror lean, cover and damage staying legible without colour -- is
+re-derived from the pixels by :mod:`~battle_city_tools.assets.validation`. Those
+thresholds are this pack's operational floors rather than specification minima; see
+:mod:`~battle_city_tools.assets.catalog`.
 
 *Art cannot move a hitbox.* Collision sizes are declared in
 :mod:`~battle_city_tools.assets.catalog` and cross-checked against ``battle_city_sim`` by

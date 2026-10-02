@@ -48,14 +48,31 @@ re-derives every claim in `atlas.json` from the pixels, and fails if one does no
 
 ## Readability without colour
 
-The accessibility and art specifications both require that the states a player must read
-survive a viewer who cannot separate two hues. Those are not prose claims here: they are
-thresholds in `atlas.json` under `readability`, re-checked on grey-scale pixels by the
-validator. Specifically, the two factions and open ground versus forest hold a minimum
-mean-luma gap; shielded versus unshielded enemies and the three powerup kinds hold
-different silhouettes; water phases change shape rather than only hue; and the two mirror
-tiles are required to lean in opposite directions, measured as a signed luma difference
-between the top-right and top-left quarters of the frame.
+The accessibility and art specifications require a property: the states a player must read
+have to survive a viewer who cannot separate two hues. They set no numbers.
+
+The numbers in `atlas.json` under `readability` are this pack's own, and they are
+regression guards rather than targets. Each was set by measuring the shipped art and then
+writing down a value comfortably underneath it, so a later redraw that flattens a
+distinction fails the validator instead of shipping. Specifically, the two factions and
+open ground versus forest hold a mean-luma gap; shielded versus unshielded enemies and the
+three powerup kinds hold different silhouettes; water phases change shape rather than only
+hue; and the two mirror tiles lean in opposite directions, measured as a signed luma
+difference between the top-right and top-left quarters of the frame.
+
+Every rule currently passes with margin. The tightest is the player-versus-enemy mean-luma
+gap, which measures 25 against a threshold of 18; the mirror lean measures -73 and +68
+against a magnitude guard of 10.
+
+Three caveats, because a number in a file invites more confidence than it has earned.
+Passing these thresholds is evidence the property holds, not proof of it. It is **not a
+conformance claim** against any accessibility standard: there is no contrast ratio here,
+no stated viewing condition, and no display assumption. And the pairs are a judgement
+about which distinctions a player must make, not an exhaustive derivation from the
+specifications -- a mechanical check over grey-scale pixels is a floor under the property,
+never a replacement for looking at the art. Changing a threshold is an art decision
+recorded in `catalog.py`; lowering one is an admission that a distinction got weaker,
+which is the conversation the number exists to force.
 
 ## `stage-composite.png` is not a screenshot
 

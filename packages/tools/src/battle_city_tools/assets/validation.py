@@ -24,8 +24,11 @@ What is checked, and why each one is here:
 * every frame's source identifier resolves, every source is used, and every source carries
   authorship and a licence value
 * every animation and state mapping names a frame that exists
-* the readability rules still hold on grey-scale pixels, which is the only mechanical
-  check that faction, mirror lean, cover, damage and powerup kind survive without colour
+* the readability thresholds still hold on grey-scale pixels. These are the pack's own
+  operational floors, not numbers any specification sets, and clearing them is evidence
+  that faction, mirror lean, cover, damage and powerup kind survive without colour rather
+  than proof of it or a conformance claim. :mod:`~battle_city_tools.assets.catalog` says
+  where the values come from
 * optionally, that all of the above still agrees with the shipped catalogue, which is what
   catches a sidecar that was hand-edited into agreeing with itself
 """
@@ -40,7 +43,7 @@ from typing import Final
 from . import catalog as catalog_module
 from .errors import AssetDiagnostic, AssetInvalid
 from .layout import pack
-from .metadata import ATLAS_FILENAME, METADATA_FILENAME, AtlasMetadata, load
+from .metadata import METADATA_FILENAME, AtlasMetadata, load
 from .palette import PALETTE
 from .png import decode_png
 from .raster import Image
@@ -81,9 +84,7 @@ class _Collector:
         self.checks.append(name)
 
     def fail(self, field: str, message: str) -> None:
-        self.problems.append(
-            AssetDiagnostic(artifact=self.artifact, field=field, message=message)
-        )
+        self.problems.append(AssetDiagnostic(artifact=self.artifact, field=field, message=message))
 
     def report(self) -> ValidationReport:
         return ValidationReport(
@@ -203,9 +204,7 @@ def _check_layout(collector: _Collector, metadata: AtlasMetadata) -> None:
         )
 
 
-def _check_frames(
-    collector: _Collector, metadata: AtlasMetadata, atlas: Image
-) -> dict[str, Image]:
+def _check_frames(collector: _Collector, metadata: AtlasMetadata, atlas: Image) -> dict[str, Image]:
     collector.check("every frame lies inside the atlas and matches its recorded pixels")
     width, height = metadata.frame_size
     covered = bytearray(atlas.width * atlas.height)

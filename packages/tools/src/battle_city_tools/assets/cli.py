@@ -96,9 +96,9 @@ def _dispatch(options: argparse.Namespace) -> int:
         print(report.summary())
         return EXIT_OK
     if options.command == "validate":
-        report = validate_directory(options.pack, require_catalog=not options.ignore_catalog)
-        print(report.summary(), file=sys.stdout if report.ok else sys.stderr)
-        return EXIT_OK if report.ok else EXIT_INVALID
+        outcome = validate_directory(options.pack, require_catalog=not options.ignore_catalog)
+        print(outcome.summary(), file=sys.stdout if outcome.ok else sys.stderr)
+        return EXIT_OK if outcome.ok else EXIT_INVALID
     return _describe(options.pack)
 
 

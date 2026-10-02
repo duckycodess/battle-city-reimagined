@@ -24,10 +24,14 @@ from assets_helpers import (
 from battle_city_tools.assets.metadata import AtlasMetadata, serialize
 from battle_city_tools.assets.png import encode_png
 from battle_city_tools.assets.raster import Canvas, Image
-from battle_city_tools.assets.validation import validate, validate_directory
+from battle_city_tools.assets.validation import (
+    ValidationReport,
+    validate,
+    validate_directory,
+)
 
 
-def _check(metadata: AtlasMetadata, atlas: Image) -> object:
+def _check(metadata: AtlasMetadata, atlas: Image) -> ValidationReport:
     return validate(metadata, atlas, artifact="fixture.json", require_catalog=False)
 
 
@@ -84,8 +88,9 @@ def test_an_overlapping_rectangle_is_reported() -> None:
     metadata, atlas, _ = synthetic_pack()
     second = metadata.frames[1]
     overlapped = replace(second, rect=metadata.frames[0].rect)
-    report = _check(replace(metadata, frames=(metadata.frames[0], overlapped,
-                                              *metadata.frames[2:])), atlas)
+    report = _check(
+        replace(metadata, frames=(metadata.frames[0], overlapped, *metadata.frames[2:])), atlas
+    )
     assert problems_mentioning(report, "overlaps another frame")
 
 
@@ -219,9 +224,7 @@ def test_faction_contrast_is_actually_measured() -> None:
         metadata.readability,
         luma_contrast=(("tank-player-up", "tank-enemy-normal-up", 250),),
     )
-    report = validate(
-        replace(metadata, readability=impossible), atlas, require_catalog=False
-    )
+    report = validate(replace(metadata, readability=impossible), atlas, require_catalog=False)
     assert problems_mentioning(report, "mean luma differs by")
 
 
@@ -231,9 +234,7 @@ def test_silhouette_difference_is_actually_measured() -> None:
         metadata.readability,
         silhouette_distinct=(("tank-enemy-shielded-up", "tank-enemy-unshielded-up", 1000),),
     )
-    report = validate(
-        replace(metadata, readability=impossible), atlas, require_catalog=False
-    )
+    report = validate(replace(metadata, readability=impossible), atlas, require_catalog=False)
     assert problems_mentioning(report, "opaque silhouettes differ on")
 
 
@@ -242,18 +243,14 @@ def test_grey_scale_difference_is_actually_measured() -> None:
     impossible = replace(
         metadata.readability, luma_distinct=(("terrain-water-0", "terrain-water-1", 1000),)
     )
-    report = validate(
-        replace(metadata, readability=impossible), atlas, require_catalog=False
-    )
+    report = validate(replace(metadata, readability=impossible), atlas, require_catalog=False)
     assert problems_mentioning(report, "grey scale differs on")
 
 
 def test_mirror_lean_is_actually_measured() -> None:
     """Flipping the expected sign must fail: the check is about this art, not a constant."""
     metadata, atlas = shipped_metadata(), shipped_atlas()
-    flipped = replace(
-        metadata.readability, quadrant_sign=(("terrain-mirror-ne", 1, 10),)
-    )
+    flipped = replace(metadata.readability, quadrant_sign=(("terrain-mirror-ne", 1, 10),))
     report = validate(replace(metadata, readability=flipped), atlas, require_catalog=False)
     assert problems_mentioning(report, "does not lean")
 

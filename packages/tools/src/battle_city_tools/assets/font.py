@@ -101,8 +101,6 @@ def draw_text(
             for column, bit in enumerate(bits):
                 if bit != "#":
                     continue
-                canvas.fill_rect(
-                    cursor + column * scale, y + row * scale, scale, scale, color
-                )
+                canvas.fill_rect(cursor + column * scale, y + row * scale, scale, scale, color)
         cursor += GLYPH_WIDTH * scale + spacing
     return cursor

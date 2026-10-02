@@ -19,10 +19,26 @@ anchor, in frame pixels. A tank's position is its top-left pixel, so tank art an
 ``(0, 0)``; a projectile's position is its centre pixel, so a shot anchors at the middle
 of its frame. Changing a pivot moves art. It never moves a collision box.
 
-**Readability.** The accessibility and art specifications both require that faction,
-mirror direction, forest cover, damage and the powerup kinds survive a viewer who cannot
-separate two hues. Those claims are written here as thresholds over grey-scale pixels, so
-the validator fails when the art stops supporting them instead of when somebody notices.
+**Readability.** The accessibility and art specifications require a *property*: faction,
+mirror direction, forest cover, water animation, damage and invincibility must stay
+readable without relying on colour alone. They state no numbers, and the numbers below are
+not derived from them.
+
+What the numbers are is this pack's own operational thresholds -- regression guards, set
+by measuring the shipped art and then writing down a value comfortably underneath it, so
+that a redraw which quietly flattens a distinction fails a test instead of shipping. Every
+rule currently passes with margin; the tightest is the player-versus-enemy mean-luma gap,
+where the art measures 25 against a threshold of 18.
+
+Three things follow from that, and are worth being plain about. Passing these thresholds
+is evidence the property holds, not proof of it, and it is not a conformance claim against
+any accessibility standard -- there is no contrast ratio here and no stated viewing
+condition. The thresholds are calibrated to *this* art, so raising one is an art decision
+recorded in this file, and lowering one is an admission that a distinction got weaker,
+which is exactly the conversation the number exists to force. And the set of pairs is a
+judgement about which distinctions a player must make, not an exhaustive derivation from
+the specifications; a mechanical check over grey-scale pixels is a floor under the
+property, never a substitute for looking at the art.
 """
 
 from __future__ import annotations
@@ -285,12 +301,16 @@ LUMA_CONTRAST: Final[tuple[tuple[str, str, int], ...]] = (
     ("terrain-home-intact", "terrain-home-destroyed", 12),
     ("terrain-stone", "terrain-brick", 12),
 )
-"""Pairs whose mean luma over the frame must differ by at least the given amount.
+"""Pairs whose mean luma over the frame differs by at least the given amount in this pack.
 
 Mean luma is taken over the whole frame with transparent pixels counted as black, which
 is what a player sees against the playfield. These are the pairs a viewer must still tell
 apart with the colour removed: the two factions, cover versus open ground, a base that is
 still standing, and the two wall materials.
+
+The amounts are measured floors under the shipped art, not minima any specification sets.
+At the time of writing the pairs measure 25, 26, 58, 42 and 38 against the 18, 18, 30, 12
+and 12 recorded here.
 """
 
 SILHOUETTE_DISTINCT: Final[tuple[tuple[str, str, int], ...]] = (
@@ -302,10 +322,14 @@ SILHOUETTE_DISTINCT: Final[tuple[tuple[str, str, int], ...]] = (
     ("effect-explosion-0", "effect-explosion-2", 60),
     ("effect-spawn-0", "effect-spawn-2", 60),
 )
-"""Pairs whose opaque silhouettes must differ on at least this many pixels per thousand.
+"""Pairs whose opaque silhouettes differ on at least this many pixels per thousand.
 
 Shape, not hue. A shielded and an unshielded enemy are the same red; the armour has to
 change the outline. The three powerups sit on the same plate; the icon has to change it.
+
+Again a floor under what the art does rather than a mandated minimum. The tightest pair
+here is forest against open ground at 70 per thousand over a floor of 60; the loosest is
+the two explosion phases at 453.
 """
 
 LUMA_DISTINCT: Final[tuple[tuple[str, str, int], ...]] = (
@@ -319,15 +343,23 @@ LUMA_DISTINCT: Final[tuple[tuple[str, str, int], ...]] = (
     ("shot-left", "shot-right", 60),
     ("effect-shield-0", "effect-shield-1", 40),
 )
-"""Pairs that must differ in grey scale on at least this many pixels per thousand.
+"""Pairs that differ in grey scale on at least this many pixels per thousand.
 
 A pixel counts when its luma differs by at least :data:`LUMA_DISTINCT_STEP`. The two
-mirrors fill the same square, so no silhouette test can separate them; water must change
-shape between phases rather than only hue; a facing has to be readable from the hull.
+mirrors fill the same square, so no silhouette test can separate them; water changes shape
+between phases rather than only hue; a facing is readable from the hull.
+
+These are the pack's floors, not specification minima. The tightest are the two shot axes
+at 78 per thousand over a floor of 60.
 """
 
 LUMA_DISTINCT_STEP: Final[int] = 24
-"""How far two luma values must differ before the pixel counts as visibly different."""
+"""How far two luma values differ before this pack counts the pixel as visibly different.
+
+A chosen working value, not a perceptual constant. Roughly a tenth of the range, which is
+coarse enough that palette neighbours and anti-aliased edges do not register as a
+difference and fine enough that a deliberate tonal change does.
+"""
 
 QUADRANT_SIGN: Final[tuple[tuple[str, int, int], ...]] = (
     ("terrain-mirror-ne", -1, 10),
@@ -338,6 +370,11 @@ QUADRANT_SIGN: Final[tuple[tuple[str, int, int], ...]] = (
 The metric is the mean luma of the top-right quarter minus the mean luma of the top-left
 quarter. A ``\\`` surface is bright at the top left, so its metric is negative; a ``/``
 surface is bright at the top right, so its metric is positive.
+
+Here the *sign* is the real assertion and is not a calibrated threshold at all: it is the
+deflection the simulation implements, so getting it backwards is a correctness bug rather
+than a readability regression. The magnitude of 10 is only a guard against a frame so flat
+that its sign is noise; the art measures -73 and +68.
 
 The signs follow the deflection table, not the tile names. ``battle_city_sim.tiles``
 records that the historical names read backwards against their geometry: ``MIRROR_NE``

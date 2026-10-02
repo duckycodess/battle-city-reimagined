@@ -139,18 +139,14 @@ def _entities(
         shot = metadata.frame("shot-right")
         centre_x = mirror.x * tile_size - 3
         centre_y = mirror.y * tile_size + tile_size // 2
-        sprites.append(
-            _Sprite("shot-right", centre_x - shot.pivot[0], centre_y - shot.pivot[1])
-        )
+        sprites.append(_Sprite("shot-right", centre_x - shot.pivot[0], centre_y - shot.pivot[1]))
 
     for frame, cell in zip(POWERUP_FRAMES, _central_empty_cells(level, 3), strict=False):
         sprites.append(_Sprite(frame, cell.x * tile_size, cell.y * tile_size))
 
     brick = _first_cell(level, (TileCode.BRICK,))
     if brick is not None:
-        sprites.append(
-            _Sprite("effect-explosion-2", brick.x * tile_size, brick.y * tile_size)
-        )
+        sprites.append(_Sprite("effect-explosion-2", brick.x * tile_size, brick.y * tile_size))
     sprites.append(_Sprite("effect-shield-0", player_x, player_y))
     return tuple(sprites)
 

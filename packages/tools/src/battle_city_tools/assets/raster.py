@@ -238,9 +238,7 @@ def _nearest(color: Rgb, palette: tuple[Rgb, ...]) -> Rgb:
     best = palette[0]
     best_distance = -1
     for candidate in palette:
-        delta = (
-            (candidate[0] - red) ** 2 + (candidate[1] - green) ** 2 + (candidate[2] - blue) ** 2
-        )
+        delta = (candidate[0] - red) ** 2 + (candidate[1] - green) ** 2 + (candidate[2] - blue) ** 2
         if best_distance < 0 or delta < best_distance:
             best, best_distance = candidate, delta
             if delta == 0:
