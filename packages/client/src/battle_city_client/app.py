@@ -167,10 +167,13 @@ class ClientApp:
                 | pygame.JOYAXISMOTION
                 | pygame.JOYHATMOTION
             ):
-                control = self.gamepads.handle_event(
+                # One reading can carry more than one transition -- a stick thrown
+                # across centre, a hat moved onto a diagonal -- and the hub hands them
+                # over in a fixed order, releases first. Applying all of them is what
+                # stops a direction sticking down after the stick has left it.
+                for control in self.gamepads.handle_event(
                     event, self.shell.accessibility.dead_zone_percent
-                )
-                if control is not None:
+                ):
                     self._handle_control(control)
             case _:
                 return

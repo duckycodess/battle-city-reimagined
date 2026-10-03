@@ -147,27 +147,42 @@ class GamepadHub:
 
     def handle_event(
         self, event: pygame.event.Event, dead_zone_percent: int
-    ) -> ControlEvent | None:
-        """Translate one SDL joystick event, or return ``None`` for anything else.
+    ) -> tuple[ControlEvent, ...]:
+        """Translate one SDL joystick event into every transition it carries.
 
-        An axis or hat event becomes at most one :class:`ControlEvent`, because the only
-        thing a frame needs to know is what *changed*: SDL reports a held stick many times
-        a second, and turning each report into a press would make one push look like a
-        hundred.
+        A tuple rather than one event, and every release before every press. One SDL
+        reading can be more than one transition: a stick thrown from one side straight
+        past centre to the other is a release *and* a press, and a hat moved to a
+        diagonal or flipped across it moves both of its axes at once. Returning the
+        first of those and keeping the rest would be worse than returning none, because
+        the hub has already recorded the new position -- the dropped transition is one
+        the next reading compares equal to and never reports at all. That is exactly the
+        bug this shape removes.
+
+        Only transitions are reported. SDL reports a held stick many times a second, and
+        turning each report into a press would make one push look like a hundred, so a
+        reading that lands where the last one did produces nothing.
+
+        The order is fixed, not incidental: releases first, then presses, and within each
+        the horizontal axis before the vertical. A caller feeding these into held state
+        would otherwise see a press and a release of the same control resolve by whichever
+        came out first, and the client's rule is that press order decides a facing.
         """
         match event.type:
             case pygame.JOYBUTTONDOWN | pygame.JOYBUTTONUP:
-                return ControlEvent(
-                    device=int(event.instance_id),
-                    control=GamepadControl(GamepadControlKind.BUTTON, int(event.button)),
-                    pressed=event.type == pygame.JOYBUTTONDOWN,
+                return (
+                    ControlEvent(
+                        device=int(event.instance_id),
+                        control=GamepadControl(GamepadControlKind.BUTTON, int(event.button)),
+                        pressed=event.type == pygame.JOYBUTTONDOWN,
+                    ),
                 )
             case pygame.JOYAXISMOTION:
-                return self._axis_event(event, dead_zone_percent)
+                return self._axis_events(event, dead_zone_percent)
             case pygame.JOYHATMOTION:
-                return self._hat_event(event)
+                return self._hat_events(event)
             case _:
-                return None
+                return ()
 
     def released(self, instance: int) -> tuple[GamepadControl, ...]:
         """Every control this device was last seen holding, for neutralising it.
@@ -190,52 +205,89 @@ class GamepadHub:
                 held.append(GamepadControl(GamepadControlKind.HAT, hat, y, 1))
         return tuple(sorted(held, key=lambda control: control.sort_key))
 
-    def _axis_event(self, event: pygame.event.Event, dead_zone_percent: int) -> ControlEvent | None:
+    def _axis_events(
+        self, event: pygame.event.Event, dead_zone_percent: int
+    ) -> tuple[ControlEvent, ...]:
+        """Every transition one stick reading carries, release first.
+
+        A stick thrown from one side straight to the other skips centre, and SDL may
+        well never report the reading in between: the only place both halves can be
+        reported is here, from the one event that crossed.
+        """
         instance = int(event.instance_id)
         axis = int(event.axis)
         direction = axis_direction(float(event.value), dead_zone_percent)
         previous = self._axes.get((instance, axis), 0)
         if direction == previous:
-            return None
+            return ()
         self._axes[(instance, axis)] = direction
-        if previous != 0:
-            # Leaving one side of the dead zone is a release, even when the stick kept
-            # going and is already on the other side. The press for the new side arrives
-            # on the next reading, which is one frame away at most.
-            return ControlEvent(
-                device=instance,
-                control=GamepadControl(GamepadControlKind.AXIS, axis, previous),
-                pressed=False,
-            )
-        return ControlEvent(
-            device=instance,
-            control=GamepadControl(GamepadControlKind.AXIS, axis, direction),
-            pressed=True,
+        return _transitions(
+            instance, GamepadControlKind.AXIS, axis, 0, before=previous, after=direction
         )
 
-    def _hat_event(self, event: pygame.event.Event) -> ControlEvent | None:
+    def _hat_events(self, event: pygame.event.Event) -> tuple[ControlEvent, ...]:
+        """Every transition one hat reading carries, releases first, horizontal first.
+
+        A hat moves both of its axes in one reading whenever it goes to a diagonal,
+        leaves one, or flips across the centre, and a hat released from a diagonal
+        releases two controls at once. All of them come out of this one event.
+        """
         instance = int(event.instance_id)
         hat = int(event.hat)
-        x, y = (int(event.value[0]), -int(event.value[1]))
         # SDL's hat reports up as +1 and the client's screen coordinates grow downward,
         # so the vertical component is flipped here, once, rather than in each binding.
-        previous_x, previous_y = self._hats.get((instance, hat), (0, 0))
-        self._hats[(instance, hat)] = (x, y)
-        for axis, current, before in ((0, x, previous_x), (1, y, previous_y)):
-            if current == before:
-                continue
-            if before != 0:
-                return ControlEvent(
-                    device=instance,
-                    control=GamepadControl(GamepadControlKind.HAT, hat, before, axis),
-                    pressed=False,
-                )
-            return ControlEvent(
-                device=instance,
-                control=GamepadControl(GamepadControlKind.HAT, hat, current, axis),
+        after = (int(event.value[0]), -int(event.value[1]))
+        before = self._hats.get((instance, hat), (0, 0))
+        if after == before:
+            return ()
+        self._hats[(instance, hat)] = after
+        return tuple(
+            transition
+            for sub_axis in (0, 1)
+            for transition in _transitions(
+                instance,
+                GamepadControlKind.HAT,
+                hat,
+                sub_axis,
+                before=before[sub_axis],
+                after=after[sub_axis],
+            )
+        )
+
+
+def _transitions(
+    device: int,
+    kind: GamepadControlKind,
+    index: int,
+    sub_axis: int,
+    *,
+    before: int,
+    after: int,
+) -> tuple[ControlEvent, ...]:
+    """One axis going from ``before`` to ``after``, as a release and then a press.
+
+    Zero to a side is one press, a side to zero is one release, and a side straight to
+    the other side is both -- in that order, so a caller that feeds these into held
+    state never has a press undone by the release it arrived with.
+    """
+    events: list[ControlEvent] = []
+    if before != 0:
+        events.append(
+            ControlEvent(
+                device=device,
+                control=GamepadControl(kind, index, before, sub_axis),
+                pressed=False,
+            )
+        )
+    if after != 0:
+        events.append(
+            ControlEvent(
+                device=device,
+                control=GamepadControl(kind, index, after, sub_axis),
                 pressed=True,
             )
-        return None
+        )
+    return tuple(events)
 
 
 def open_gamepads() -> GamepadHub:

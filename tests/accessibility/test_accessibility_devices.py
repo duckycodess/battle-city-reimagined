@@ -32,7 +32,12 @@ from battle_city_client.accessibility import (
     RepeatOptions,
 )
 from battle_city_client.app import ClientApp, build_app
-from battle_city_client.gamepad import GamepadHub, close_gamepads, open_gamepads
+from battle_city_client.gamepad import (
+    ControlEvent,
+    GamepadHub,
+    close_gamepads,
+    open_gamepads,
+)
 from battle_city_client.intents import KEYBOARD_DEVICE, Action
 from battle_city_client.keymap import DEFAULT_BINDINGS
 from battle_city_client.shell import PauseCause, Screen
@@ -139,6 +144,116 @@ def test_the_pad_fires_and_pauses(app: ClientApp) -> None:
     assert app.held.intent().fire
     app.handle_event(button_event(PAD, 7))
     assert observed(app.shell.screen) is Screen.PAUSED
+
+
+# -- transitions one reading carries ----------------------------------------------
+#
+# Regression. These all used to be dropped. ``_axis_event`` recorded the new position
+# and then returned only the *release* of the old one, so the press for the side the
+# stick had arrived at never came: the next reading compared equal to what was stored
+# and reported nothing at all, leaving the player with a tank that stopped when they
+# threw the stick the other way. ``_hat_event`` had the same shape -- it stored both new
+# coordinates and returned the first changed component -- so every diagonal and every
+# flip lost one of its two axes, permanently.
+
+
+def test_a_stick_thrown_across_centre_releases_one_side_and_presses_the_other(
+    app: ClientApp,
+) -> None:
+    hub = app.gamepads
+    assert hub.handle_event(axis_event(PAD, 0, 1.0), 25) == (
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.AXIS, 0, 1), True),
+    )
+    # The release of the side being left, then the press of the side being reached.
+    # SDL need never report the centre in between, so this one event carries both.
+    assert hub.handle_event(axis_event(PAD, 0, -1.0), 25) == (
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.AXIS, 0, 1), False),
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.AXIS, 0, -1), True),
+    )
+
+
+def test_reversing_the_stick_mid_run_reverses_the_tank(app: ClientApp) -> None:
+    """The bug as a player met it: throwing the stick the other way stopped the tank."""
+    _start_a_run(app)
+    app.handle_event(axis_event(PAD, 0, 1.0))
+    assert observed(app.held.intent().direction) is Direction.RIGHT
+    app.handle_event(axis_event(PAD, 0, -1.0))
+    assert observed(app.held.intent().direction) is Direction.LEFT
+    assert app.held.ordered() == (Action.MOVE_LEFT,)
+
+
+def test_a_reversed_stick_is_still_only_held_once(app: ClientApp) -> None:
+    """The released side must really be released, not merely outranked by recency."""
+    _start_a_run(app)
+    app.handle_event(axis_event(PAD, 0, 1.0))
+    app.handle_event(axis_event(PAD, 0, -1.0))
+    app.handle_event(axis_event(PAD, 0, 0.0))
+    assert app.held.ordered() == ()
+    assert app.held.intent().idle
+
+
+def test_a_hat_flipped_across_centre_reports_both_halves(app: ClientApp) -> None:
+    hub = app.gamepads
+    hub.handle_event(hat_event(PAD, 0, (1, 0)), 25)
+    assert hub.handle_event(hat_event(PAD, 0, (-1, 0)), 25) == (
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, 1, 0), False),
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, -1, 0), True),
+    )
+
+
+def test_a_hat_moved_onto_a_diagonal_presses_both_axes(app: ClientApp) -> None:
+    """One reading, two axes. SDL reports hat up as ``+1``; the client's screen grows
+    downward, so ``(1, 1)`` is right and up."""
+    hub = app.gamepads
+    assert hub.handle_event(hat_event(PAD, 0, (1, 1)), 25) == (
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, 1, 0), True),
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, -1, 1), True),
+    )
+
+
+def test_a_hat_released_from_a_diagonal_releases_both_axes(app: ClientApp) -> None:
+    hub = app.gamepads
+    hub.handle_event(hat_event(PAD, 0, (1, 1)), 25)
+    assert hub.handle_event(hat_event(PAD, 0, (0, 0)), 25) == (
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, 1, 0), False),
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, -1, 1), False),
+    )
+
+
+def test_a_hat_flipped_across_a_diagonal_releases_before_it_presses(app: ClientApp) -> None:
+    """Four transitions from one reading, and the order is what keeps them coherent."""
+    hub = app.gamepads
+    hub.handle_event(hat_event(PAD, 0, (1, 1)), 25)
+    assert hub.handle_event(hat_event(PAD, 0, (-1, -1)), 25) == (
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, 1, 0), False),
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, -1, 0), True),
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, -1, 1), False),
+        ControlEvent(PAD, GamepadControl(GamepadControlKind.HAT, 0, 1, 1), True),
+    )
+
+
+def test_a_hat_diagonal_drives_the_tank_and_leaves_nothing_behind(app: ClientApp) -> None:
+    _start_a_run(app)
+    app.handle_event(hat_event(PAD, 0, (1, 1)))
+    assert app.held.ordered() == (Action.MOVE_RIGHT, Action.MOVE_UP)
+    app.handle_event(hat_event(PAD, 0, (-1, -1)))
+    assert app.held.ordered() == (Action.MOVE_LEFT, Action.MOVE_DOWN)
+    app.handle_event(hat_event(PAD, 0, (0, 0)))
+    assert app.held.ordered() == ()
+
+
+def test_a_reading_that_did_not_move_carries_no_transition(app: ClientApp) -> None:
+    """A held stick is reported many times a second; one push stays one press."""
+    hub = app.gamepads
+    assert len(hub.handle_event(axis_event(PAD, 0, 0.9), 25)) == 1
+    for value in (0.92, 0.95, 1.0):
+        assert hub.handle_event(axis_event(PAD, 0, value), 25) == ()
+    assert hub.handle_event(hat_event(PAD, 0, (1, 0)), 25)
+    assert hub.handle_event(hat_event(PAD, 0, (1, 0)), 25) == ()
+
+
+def test_an_unrelated_event_carries_no_transition(app: ClientApp) -> None:
+    assert app.gamepads.handle_event(key_event(pygame.K_a), 25) == ()
 
 
 # -- devices coming and going ----------------------------------------------------
