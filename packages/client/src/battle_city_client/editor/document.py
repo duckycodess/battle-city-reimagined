@@ -14,6 +14,13 @@ validation rule is copied, so the editor, the headless tools and the game cannot
 about what a level is; what is copied is the shape of an editable grid, which is small
 and visibly the same in both files.
 
+The declared schema version is the one thing this model computes rather than stores.
+Painting a conveyor or a teleport pad makes a document a version 2 document, because
+those codes do not exist in version 1 and a file claiming version 1 while carrying one
+would be refused by every reader including this editor; removing them again does not drag
+a document that was *opened* as version 2 back down, because its author chose that
+version. See :attr:`EditorDocument.effective_schema_version`.
+
 Beyond that, this model owns what the headless draft has no use for: whether the document
 has unsaved changes, which file it was opened from, and which file a save is allowed to
 write. The save target is never inferred. An editor that silently wrote back over the
@@ -34,6 +41,7 @@ from typing import Final
 
 from battle_city_content import (
     CLASSIC_GRID_SIZE,
+    GIMMICK_LEVEL_SCHEMA_VERSION,
     LEVEL_SCHEMA_VERSION,
     TILE_BY_CHAR,
     ContentError,
@@ -46,6 +54,7 @@ from battle_city_content import (
     Wave,
     bundled_content_root,
     load_level,
+    uses_gimmick_tiles,
 )
 
 BLANK_BASE_CELL: Final[GridCell] = GridCell(x=7, y=15)
@@ -197,6 +206,35 @@ class EditorDocument:
     def grid_rows(self) -> tuple[str, ...]:
         return tuple("".join(row) for row in self.rows)
 
+    @property
+    def uses_gimmick_tiles(self) -> bool:
+        """Whether any cell holds a code only level schema version 2 defines."""
+        return uses_gimmick_tiles(self.grid_rows())
+
+    @property
+    def teleport_pads(self) -> tuple[GridCell, ...]:
+        """Every teleport pad, in row-major order. A valid level declares zero or two."""
+        return tuple(
+            GridCell(x, y)
+            for y, row in enumerate(self.rows)
+            for x, code in enumerate(row)
+            if code == TileCode.TELEPORT_PAD.value
+        )
+
+    @property
+    def effective_schema_version(self) -> int:
+        """The version a save would declare: version 2 once gimmick terrain is painted.
+
+        Raised by the content, never lowered by it. A document opened as version 2 stays
+        version 2 after its last conveyor is erased, because the version is something its
+        author declared and erasing a tile is not a decision to downgrade the file. A
+        version 1 document that gains a conveyor has to move, because there is no such
+        thing as a valid version 1 level carrying one.
+        """
+        if self.uses_gimmick_tiles:
+            return max(self.schema_version, GIMMICK_LEVEL_SCHEMA_VERSION)
+        return self.schema_version
+
     # -- spawns ----------------------------------------------------------------
 
     @property
@@ -264,7 +302,7 @@ class EditorDocument:
     def to_document(self) -> dict[str, object]:
         """The level document, keyed in the order the bundled levels use."""
         document: dict[str, object] = {
-            "schema_version": self.schema_version,
+            "schema_version": self.effective_schema_version,
             "id": self.level_id,
             "name": self.name,
         }

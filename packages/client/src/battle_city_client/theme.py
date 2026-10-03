@@ -80,6 +80,22 @@ MIRROR_DARK: Final[Color] = (120, 132, 156)
 HOME: Final[Color] = (238, 214, 120)
 HOME_DARK: Final[Color] = (146, 118, 40)
 
+CONVEYOR: Final[Color] = (74, 80, 96)
+CONVEYOR_RIB: Final[Color] = (112, 120, 142)
+CONVEYOR_ARROW: Final[Color] = (236, 240, 248)
+PAD: Final[Color] = (36, 60, 72)
+PAD_RING: Final[Color] = (150, 206, 226)
+PAD_LINK: Final[Color] = (240, 246, 250)
+"""The opt-in gimmick terrain.
+
+Hue is doing no work here. A conveyor is read from the arrow it carries and the ribs it
+is drawn on, a pad from a two-ended link between two bright corners, and all five are
+separated from each other and from the nine classic tiles by brightness alone -- which
+``tests/client`` asserts, by comparing coarse luminance fingerprints rather than colours.
+Nothing animates: the accessibility specification asks for cues that survive reduced
+motion, and a belt that only reads as a belt while it is scrolling does not.
+"""
+
 PLAYER_TANK: Final[Color] = (108, 198, 244)
 PLAYER_TANK_DARK: Final[Color] = (44, 118, 168)
 ENEMY_TANK: Final[Color] = (236, 108, 96)

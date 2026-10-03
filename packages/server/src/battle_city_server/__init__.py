@@ -66,7 +66,13 @@ from .config import (
     SessionConfig,
     SessionLimits,
 )
-from .content import content_ref_for, rules_digest, stage_from_level
+from .content import (
+    UnspeakableTerrainError,
+    content_ref_for,
+    require_speakable_terrain,
+    rules_digest,
+    stage_from_level,
+)
 from .lobby import (
     OFFERED_MODES,
     PLAYABLE_MODES,
@@ -122,6 +128,7 @@ __all__ = [
     "SessionServer",
     "TcpStream",
     "TickClock",
+    "UnspeakableTerrainError",
     "UntranslatableEventError",
     "commands_for",
     "content_label",
@@ -131,6 +138,7 @@ __all__ = [
     "loopback_pair",
     "protocol_event",
     "protocol_events",
+    "require_speakable_terrain",
     "rules_digest",
     "serve_tcp",
     "session_logger",

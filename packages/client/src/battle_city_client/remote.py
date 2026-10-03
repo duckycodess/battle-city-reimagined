@@ -13,6 +13,18 @@ a disagreement about the canonical encoding, which is reported as
 :class:`RemoteStateError` rather than guessed at: a client that quietly rendered an
 unknown code would be showing a board that does not exist.
 
+Terrain and the agreed content version
+--------------------------------------
+A keyframe's rows are tile-code characters, and what those characters are allowed to be
+depends on the content version this client and the server agreed on at join. The opt-in
+gimmick terrain adds five codes under content schema version 2 while leaving the wire
+version, the snapshot version and the canonical state version exactly where they were, so
+the agreed content version is the *only* thing that can say whether a row is readable.
+:func:`terrain_from_rows` therefore takes it and refuses anything outside it, rather than
+parsing whatever the simulation's vocabulary happens to contain: a version 1 session that
+received a conveyor has met a server running content it did not agree to, and saying so is
+better than drawing a board the agreement does not cover.
+
 Terrain between keyframes
 -------------------------
 A snapshot carries the grid on a keyframe only, and terrain changes in between arrive as
@@ -27,6 +39,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from battle_city_content import SUPPORTED_LEVEL_SCHEMA_VERSIONS, tile_codes_for
 from battle_city_protocol import (
     EventKind,
     GameEvent,
@@ -131,6 +144,11 @@ class RemoteBoard:
         A code the build does not know is ignored rather than raised on: a damage event
         is presentation detail, the next keyframe carries the authoritative grid, and
         dropping a frame of brick decay is a far better failure than refusing to draw.
+
+        No gimmick tile is in the simulation's projectile-damage table, so a pad or a
+        conveyor can never be the ``current`` tile of a real damage event; one that
+        claimed otherwise would simply paint the cell and be corrected by the next
+        keyframe, which is the same bounded failure as any other presentation drift.
         """
         if event.kind is not EventKind.TILE_DAMAGED:
             return self
@@ -144,12 +162,32 @@ class RemoteBoard:
         return replace(self, grid=self.grid.with_tile(cell, tile))
 
 
-def terrain_from_rows(rows: tuple[str, ...]) -> TileGrid:
-    """Build the terrain a keyframe carried.
+def terrain_from_rows(rows: tuple[str, ...], *, content_schema_version: int) -> TileGrid:
+    """Build the terrain a keyframe carried, in the content version that was agreed.
 
     The rows are the content package's tile codes, which is the same vocabulary the
-    simulation reads, so this is a parse rather than a translation.
+    simulation reads, so this is a parse rather than a translation. The alphabet is
+    narrowed to ``content_schema_version`` first, because the simulation can represent
+    terrain this session never agreed to receive.
+
+    Raises :class:`RemoteStateError` for an unsupported version or an out-of-version code.
+    Both mean the peers disagree about the content, which is exactly what the agreed
+    version exists to catch.
     """
+    if content_schema_version not in SUPPORTED_LEVEL_SCHEMA_VERSIONS:
+        supported = ", ".join(str(version) for version in sorted(SUPPORTED_LEVEL_SCHEMA_VERSIONS))
+        raise RemoteStateError(
+            f"keyframe grid: content schema version {content_schema_version} is not "
+            f"supported; this build reads {supported}"
+        )
+    allowed = tile_codes_for(content_schema_version)
+    for y, row in enumerate(rows):
+        for x, code in enumerate(row):
+            if code not in allowed:
+                raise RemoteStateError(
+                    f"keyframe grid: rows[{y}][{x}] is tile code {code!r}, which content "
+                    f"schema version {content_schema_version} does not define"
+                )
     try:
         return TileGrid.from_rows(rows)
     except StageValidationError as error:

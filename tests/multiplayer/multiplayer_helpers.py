@@ -59,7 +59,7 @@ from battle_city_server import (
     loopback_pair,
     stage_from_level,
 )
-from battle_city_sim import Tile
+from battle_city_sim import Tile, tile_code_char
 
 SESSION_ID = "match-1"
 PACK_ID = "duo-pack"
@@ -80,19 +80,28 @@ ENEMY_CELLS: tuple[tuple[int, int], ...] = ((1, 1), (14, 1))
 # -- content ------------------------------------------------------------------
 
 
-def _rows() -> list[str]:
+def _rows(overrides: Mapping[tuple[int, int], Tile] | None = None) -> list[str]:
     """Sixteen rows of empty ground with one home base, as tile-code strings."""
-    cells = [[Tile.EMPTY.value for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
-    cells[BASE_CELL[1]][BASE_CELL[0]] = Tile.HOME.value
-    return ["".join(str(value) for value in row) for row in cells]
+    cells = [[Tile.EMPTY for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
+    cells[BASE_CELL[1]][BASE_CELL[0]] = Tile.HOME
+    for (x, y), tile in (overrides or {}).items():
+        cells[y][x] = tile
+    return ["".join(tile_code_char(tile) for tile in row) for row in cells]
 
 
-def _level_document(level_id: str, name: str, slots: Sequence[int]) -> dict[str, Any]:
+def _level_document(
+    level_id: str,
+    name: str,
+    slots: Sequence[int],
+    *,
+    schema_version: int = 1,
+    overrides: Mapping[tuple[int, int], Tile] | None = None,
+) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "id": level_id,
         "name": name,
-        "grid": {"width": GRID_SIZE, "height": GRID_SIZE, "rows": _rows()},
+        "grid": {"width": GRID_SIZE, "height": GRID_SIZE, "rows": _rows(overrides)},
         "spawns": {
             "players": [
                 {"slot": slot, "x": PLAYER_CELLS[slot][0], "y": PLAYER_CELLS[slot][1]}
@@ -139,6 +148,56 @@ def write_pack(root: Path, *, slots: Sequence[int] = (1, 2, 3)) -> Pack:
     return load_pack(path)
 
 
+GIMMICK_PACK_ID = "gimmick-pack"
+GIMMICK_LEVEL_ID = "gimmick-arena"
+GIMMICK_BELT = (4, 11)
+GIMMICK_SOURCE_PAD = (12, 11)
+GIMMICK_PARTNER_PAD = (12, 4)
+"""The sample v2 arena: a belt under slot 1's spawn and a pad pair under slot 2's.
+
+Each slot therefore spawns one cell above the terrain it will drive onto, which is the
+only way to put a tank on gimmick terrain: a spawn must stand on empty ground.
+"""
+
+
+def write_gimmick_pack(root: Path, *, slots: Sequence[int] = (1, 2)) -> Pack:
+    """Write and load a level schema version 2 pack carrying both gimmicks."""
+    levels = root / "levels"
+    levels.mkdir(parents=True, exist_ok=True)
+    (levels / f"{GIMMICK_LEVEL_ID}.json").write_text(
+        json.dumps(
+            _level_document(
+                GIMMICK_LEVEL_ID,
+                "Gimmick Arena",
+                slots,
+                schema_version=2,
+                overrides={
+                    GIMMICK_BELT: Tile.CONVEYOR_E,
+                    GIMMICK_SOURCE_PAD: Tile.TELEPORT_PAD,
+                    GIMMICK_PARTNER_PAD: Tile.TELEPORT_PAD,
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "schema_version": 1,
+        "id": GIMMICK_PACK_ID,
+        "version": PACK_VERSION,
+        "name": "Multiplayer gimmick test pack",
+        "content_schema_version": 2,
+        "authors": ["Battle City Reimagined contributors"],
+        "license": {
+            "spdx_id": "NOASSERTION",
+            "notice": "Original layout written for the multiplayer tests of this rebuild.",
+        },
+        "levels": [{"id": GIMMICK_LEVEL_ID, "path": f"levels/{GIMMICK_LEVEL_ID}.json"}],
+    }
+    path = root / "gimmick-pack.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return load_pack(path)
+
+
 def lobby_levels(pack: Pack) -> tuple[LobbyLevel, ...]:
     """Map every level in ``pack`` onto the lobby's offer, through the server's adapter."""
     return tuple(
@@ -151,8 +210,14 @@ def lobby_levels(pack: Pack) -> tuple[LobbyLevel, ...]:
     )
 
 
-def content_ref(pack: Pack, level_id: str = LEVEL_ID) -> ContentRef:
-    return content_ref_for(pack, pack.level(level_id))
+def content_ref(pack: Pack, level_id: str | None = None) -> ContentRef:
+    """The reference for ``level_id``, defaulting to the pack's first level.
+
+    Defaulting to the first level rather than to ``LEVEL_ID`` lets a test hand any pack
+    here -- the classic duo pack or the gimmick one -- without naming its levels.
+    """
+    level = pack.levels[0] if level_id is None else pack.level(level_id)
+    return content_ref_for(pack, level)
 
 
 def level_of(pack: Pack, level_id: str = LEVEL_ID) -> Level:

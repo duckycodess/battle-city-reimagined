@@ -53,6 +53,12 @@ meaningful if the list of things it may not bypass is written down.
   reported as reaching nothing, so no profile can decide to end a run on its own.
 * **Coordination.** None. Bots do not share information or divide targets; the AI
   specification defers team play to a proposal with its own fairness criteria.
+* **Gimmick terrain.** On an opt-in version 2 stage a bot predicts the conveyor push and
+  the paired-pad arrival it is about to receive, with the engine's own arithmetic and the
+  same occupancy check, so an occupied exit is never a shortcut. It does not plan *for*
+  them: there is no route planner here, and adding one is a separate proposal. On a stage
+  with no gimmick terrain every decision is byte-identical to what it was before that
+  terrain existed.
 
 Performance limits
 ------------------

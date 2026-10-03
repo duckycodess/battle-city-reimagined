@@ -62,6 +62,10 @@ Support modular level packs, a level editor and validation tools, terrain and pr
 
 Cosmetics, unlocks, and progression must not alter competitive balance. Competitive mode configuration is explicit, versioned, and included in session and replay metadata.
 
+## Bounded gimmick expansion
+
+Opt-in content schema v2 introduces directional conveyor pushes and one pair of teleport pads per stage under the accepted `gimmicks-v1` change; classic stages remain unchanged. The server owns all terrain-driven movement. Campaign quota, cadence and clear, co-op rules, score, damage, lives and win timing do not change. Competitive use remains staged; no new competitive mode toggle or rebalance is implied. The sample v2 pack is separate from the default three-stage classic menu. It is reached by naming it — a client launch option that takes a pack manifest path or a bundled pack identifier, the catalog API, or the editor — so the shipped menu lists the three classic stages whatever else is installed and a campaign save keeps meaning what it meant.
+
 ## Accessibility and reliability
 
 Support remappable keyboard and gamepad input, configurable repeat/dead-zone behavior where relevant, readable contrast and effects, non-color-only signals, reduced-motion options, and clear sound controls. Persist config and campaign saves with schema versions, validation, backups or recoverable migration, and atomic writes.

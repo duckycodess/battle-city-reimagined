@@ -23,12 +23,33 @@ CLASSIC_GRID_SIZE: Final[int] = 16
 """The classic stage is 16 columns by 16 rows. See the content specification."""
 
 LEVEL_SCHEMA_VERSION: Final[int] = 1
-"""The level ``schema_version`` this package writes and understands."""
+"""The classic level ``schema_version``: the format the three bundled stages are in.
+
+Still the default a new document is written as. A document only becomes version 2 by
+using a tile code version 1 does not have, which is what keeps an edit that touches no
+gimmick terrain loadable by a version 1 consumer.
+"""
+
+GIMMICK_LEVEL_SCHEMA_VERSION: Final[int] = 2
+"""The opt-in level ``schema_version`` that admits conveyor and teleport-pad codes.
+
+Accepted as the ``gimmicks-v1`` change. It is a separate schema file beside the classic
+one rather than an edit to it, so a level pinned to version 1 keeps loading byte for
+byte and a version 1 consumer refuses a version 2 document by name instead of
+reinterpreting a row it cannot read.
+"""
 
 PACK_SCHEMA_VERSION: Final[int] = 1
-"""The pack manifest ``schema_version`` this package writes and understands."""
+"""The pack manifest ``schema_version`` this package writes and understands.
 
-SUPPORTED_LEVEL_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset({LEVEL_SCHEMA_VERSION})
+Unchanged by the gimmick format: a manifest already states which *level* schema version
+its levels are written against, so a version 2 pack is an ordinary version 1 manifest
+whose ``content_schema_version`` is 2.
+"""
+
+SUPPORTED_LEVEL_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset(
+    {LEVEL_SCHEMA_VERSION, GIMMICK_LEVEL_SCHEMA_VERSION}
+)
 """Level schema versions a pack may declare as its compatible content schema.
 
 A future level format adds its version here alongside a migration, so an old pack keeps

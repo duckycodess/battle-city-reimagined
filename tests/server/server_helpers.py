@@ -39,7 +39,7 @@ from battle_city_server import (
     TcpStream,
     loopback_pair,
 )
-from battle_city_sim import GridPos, PlayerSpawn, Stage, Tile
+from battle_city_sim import GridPos, PlayerSpawn, Stage, Tile, tile_code_char
 
 SESSION_ID = "session-1"
 TOKENS: Mapping[int, str] = {1: "token-one-aaaaaaaa", 2: "token-two-bbbbbbbb"}
@@ -50,12 +50,12 @@ SPAWN_TWO = GridPos(12, 10)
 ENEMY_SPAWN = GridPos(2, 1)
 
 
-def content_ref() -> ContentRef:
+def content_ref(*, content_schema_version: int = 1) -> ContentRef:
     return ContentRef(
         pack_id="classic",
         pack_version="1.0.0",
         level_id="test-stage",
-        content_schema_version=1,
+        content_schema_version=content_schema_version,
     )
 
 
@@ -65,7 +65,7 @@ def build_rows(overrides: Mapping[GridPos, Tile] | None = None) -> tuple[str, ..
     cells[BASE_CELL.y][BASE_CELL.x] = Tile.HOME
     for cell, tile in (overrides or {}).items():
         cells[cell.y][cell.x] = tile
-    return tuple("".join(str(tile.value) for tile in row) for row in cells)
+    return tuple("".join(tile_code_char(tile) for tile in row) for row in cells)
 
 
 def make_stage(
@@ -89,11 +89,12 @@ def make_config(
     limits: SessionLimits | None = None,
     stage: Stage | None = None,
     seed: int = 7,
+    content: ContentRef | None = None,
 ) -> SessionConfig:
     return SessionConfig(
         session_id=SESSION_ID,
         stage=stage if stage is not None else make_stage(slots=slots),
-        content=content_ref(),
+        content=content if content is not None else content_ref(),
         credentials=tuple(
             PlayerCredential(slot=slot, token=TOKENS[slot]) for slot in sorted(slots)
         ),
@@ -103,12 +104,14 @@ def make_config(
     )
 
 
-def join_request(slot: int = 1, *, token: str | None = None) -> JoinRequest:
+def join_request(
+    slot: int = 1, *, token: str | None = None, content: ContentRef | None = None
+) -> JoinRequest:
     return JoinRequest(
         session_id=SESSION_ID,
         slot=slot,
         token=TOKENS[slot] if token is None else token,
-        content=content_ref(),
+        content=content if content is not None else content_ref(),
     )
 
 

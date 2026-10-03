@@ -133,6 +133,10 @@ class ProceduralAssetLibrary:
                 _draw_water(surface, size)
             case Tile.FOREST:
                 _draw_forest(surface, size)
+            case Tile.CONVEYOR_N | Tile.CONVEYOR_E | Tile.CONVEYOR_S | Tile.CONVEYOR_W:
+                _draw_conveyor(surface, size, CONVEYOR_FACING[tile])
+            case Tile.TELEPORT_PAD:
+                _draw_teleport_pad(surface, size)
             case Tile.HOME:
                 return self.base(destroyed=False)
         return surface
@@ -217,6 +221,22 @@ class ProceduralAssetLibrary:
         return cached
 
 
+CONVEYOR_FACING: dict[Tile, Direction] = {
+    Tile.CONVEYOR_N: Direction.UP,
+    Tile.CONVEYOR_E: Direction.RIGHT,
+    Tile.CONVEYOR_S: Direction.DOWN,
+    Tile.CONVEYOR_W: Direction.LEFT,
+}
+"""Which way each conveyor's arrow points.
+
+A second copy of :data:`battle_city_sim.tiles.CONVEYOR_DIRECTIONS`, deliberately: this one
+says what is *drawn* and the simulation's says what happens, and an arrow that disagreed
+with the push would be the worst possible bug to leave undetectable. ``tests/client``
+compares the two tables directly, so a drift fails as a table diff rather than as a
+player complaining the belt goes the wrong way.
+"""
+
+
 POWERUP_LETTERS: dict[PowerupKind, str] = {
     PowerupKind.GATLING: "G",
     PowerupKind.INVINCIBILITY: "I",
@@ -294,6 +314,67 @@ def _draw_water(surface: pygame.Surface, size: int) -> None:
             pygame.draw.line(
                 surface, theme.WATER_CREST, (column, row), (min(column + 3, size - 1), row)
             )
+
+
+def _draw_conveyor(surface: pygame.Surface, size: int, facing: Direction) -> None:
+    """Draw a belt: ribs across the travel axis, and one solid arrowhead along it.
+
+    The arrowhead is a filled triangle on the tile's centre line, pointing the way the
+    push goes, with a shaft behind it. Four orientations of one solid shape read apart at
+    16px far better than four outlines would, and they stay apart with the hue removed --
+    which is the test: a coarse luminance fingerprint of each of the five gimmick tiles
+    has to differ from every other tile in the library.
+
+    Nothing here moves. A scrolling belt would read beautifully and would say nothing at
+    all to a viewer running with reduced motion.
+    """
+    surface.fill(theme.CONVEYOR)
+    centre = size // 2
+    horizontal = facing in (Direction.LEFT, Direction.RIGHT)
+    # Ribs run across the direction of travel, so the belt reads as a belt even before
+    # the arrow is found.
+    for offset in (2, size - 3):
+        if horizontal:
+            pygame.draw.line(surface, theme.CONVEYOR_RIB, (offset, 1), (offset, size - 2))
+        else:
+            pygame.draw.line(surface, theme.CONVEYOR_RIB, (1, offset), (size - 2, offset))
+
+    tip = size - 3
+    tail = 3
+    half = 4
+    match facing:
+        case Direction.UP:
+            points = [(centre, tail), (centre - half, tail + half), (centre + half, tail + half)]
+            shaft = pygame.Rect(centre - 1, tail + half, 2, tip - tail - half)
+        case Direction.DOWN:
+            points = [(centre, tip), (centre - half, tip - half), (centre + half, tip - half)]
+            shaft = pygame.Rect(centre - 1, tail, 2, tip - tail - half)
+        case Direction.LEFT:
+            points = [(tail, centre), (tail + half, centre - half), (tail + half, centre + half)]
+            shaft = pygame.Rect(tail + half, centre - 1, tip - tail - half, 2)
+        case Direction.RIGHT:
+            points = [(tip, centre), (tip - half, centre - half), (tip - half, centre + half)]
+            shaft = pygame.Rect(tail, centre - 1, tip - tail - half, 2)
+    pygame.draw.rect(surface, theme.CONVEYOR_ARROW, shaft)
+    pygame.draw.polygon(surface, theme.CONVEYOR_ARROW, points)
+
+
+def _draw_teleport_pad(surface: pygame.Surface, size: int) -> None:
+    """Draw a pad: two bright ends joined by a link, inside a ring.
+
+    The shape says "this cell is tied to another one" without naming which, because the
+    stage has exactly one pair and the player can see both. It is deliberately nothing
+    like an arrow: a pad and a conveyor are the two tiles most likely to be confused, so
+    one is a ring with a diagonal link and the other is a straight arrowhead.
+    """
+    surface.fill(theme.PAD)
+    pygame.draw.rect(surface, theme.PAD_RING, pygame.Rect(1, 1, size - 2, size - 2), 1)
+    first = (4, size - 5)
+    second = (size - 5, 4)
+    pygame.draw.line(surface, theme.PAD_LINK, first, second, 2)
+    for x, y in (first, second):
+        pygame.draw.rect(surface, theme.PAD_LINK, pygame.Rect(x - 2, y - 2, 5, 5))
+        pygame.draw.rect(surface, theme.PAD, pygame.Rect(x - 1, y - 1, 3, 3))
 
 
 def _draw_forest(surface: pygame.Surface, size: int) -> None:

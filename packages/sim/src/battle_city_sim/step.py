@@ -17,7 +17,9 @@ changing it changes replays, so it needs a proposal.
 3. **Expire** gatling and invincibility timers, in ascending tank order.
 4. **Respawn** player slots that asked for it, onto a spawn cell phase 1 already
    proved free of tanks.
-5. **Move** tanks, in ascending tank order.
+5. **Move** tanks, in ascending tank order. Each tank resolves its commanded move, then
+   a conveyor push, then a teleport arrival, before the next tank is touched; see
+   :func:`_phase_move`.
 6. **Fire**, in ascending tank order: at most one projectile per tank per tick.
 7. **Advance** every projectile exactly once by ``rules.projectile_speed``.
 8. **Resolve terrain** for each projectile, in ascending projectile order.
@@ -103,6 +105,7 @@ from .events import (
     TileDamaged,
 )
 from .geometry import Direction, GridPos, Rect, Vec2, cell_of, cells_overlapping, clamp
+from .gimmicks import centre_cell, conveyor_target, teleport_pads, teleport_target
 from .inputs import (
     DespawnPowerupCommand,
     FireCommand,
@@ -462,39 +465,132 @@ def _phase_respawn(frame: _Frame, tick_input: TickInput) -> None:
 
 
 def _phase_move(frame: _Frame, tick_input: TickInput) -> None:
-    """Turn and advance tanks in ascending identifier order."""
+    """Resolve each tank's movement for the tick, in ascending identifier order.
+
+    One tank is finished before the next one starts, and every displacement is tested
+    against the bodies as they stand at that moment, so two tanks contending for one
+    destination are separated by their identifiers rather than by command order.
+
+    Each tank gets up to three displacements, in this fixed sub-order:
+
+    1. **Command.** The ``MoveCommand`` for this tank, if it sent one. It always turns
+       the tank and only sometimes advances it, exactly as before.
+    2. **Conveyor push.** One ``rules.tank_speed`` step, if the tank's centre cell *at
+       the start of this phase* was a conveyor. Recorded before the command so entering a
+       conveyor mid-tick does not activate it until the next tick and so leaving one
+       conveyor for another does not chain. An idle tank is pushed too, which is why this
+       loop walks every tank instead of only the ones that sent a command. A blocked push
+       cancels the push alone; the accepted command stands.
+    3. **Teleport.** One jump to the partner pad, if the centre cell the tank *ends* on
+       is a pad and is not the cell it started the phase on. Standing still on a pad
+       therefore does not re-trigger, and an arrival never chains into a second jump.
+
+    A command and a push can both land, so a tank can cover ``2 * rules.tank_speed``
+    pixels in one tick. That is the point of a conveyor and needs no new rules field.
+
+    None of this changes a tick on a stage without gimmick terrain. Steps 2 and 3 are
+    guarded by single cell lookups that no classic tile satisfies, so the events, the
+    positions and the canonical bytes of a classic run are what they always were.
+    """
     directions = {
         command.tank_id: command.direction
         for command in tick_input.commands
         if isinstance(command, MoveCommand)
     }
-    rules = frame.rules
+    pads = teleport_pads(frame.grid)
     for tank_id in frame.tank_ids():
+        start_cell = centre_cell(frame.tanks[tank_id].position, frame.rules)
         direction = directions.get(tank_id)
-        if direction is None:
-            continue
-        tank = frame.tanks[tank_id]
-        tank = replace(tank, facing=direction)
-        dx, dy = direction.scaled(rules.tank_speed)
-        target = Vec2(
-            clamp(tank.position.x + dx, 0, frame.world_width - rules.tank_size),
-            clamp(tank.position.y + dy, 0, frame.world_height - rules.tank_size),
+        if direction is not None:
+            _apply_command(frame, tank_id, direction)
+        _apply_conveyor(frame, tank_id, start_cell)
+        if pads is not None:
+            _apply_teleport(frame, tank_id, start_cell, pads)
+
+
+def _apply_command(frame: _Frame, tank_id: int, direction: Direction) -> None:
+    """Turn ``tank_id`` to ``direction`` and advance it one step if the step is free."""
+    rules = frame.rules
+    tank = replace(frame.tanks[tank_id], facing=direction)
+    dx, dy = direction.scaled(rules.tank_speed)
+    target = Vec2(
+        clamp(tank.position.x + dx, 0, frame.world_width - rules.tank_size),
+        clamp(tank.position.y + dy, 0, frame.world_height - rules.tank_size),
+    )
+    body = Rect(target.x, target.y, rules.tank_size, rules.tank_size)
+    if target == tank.position or _blocked(frame, tank_id, body):
+        frame.tanks[tank_id] = tank
+        frame.emit(TankMoveBlocked(tank_id=tank_id, position=tank.position, facing=direction))
+        return
+    frame.tanks[tank_id] = replace(tank, position=target)
+    frame.emit(
+        TankMoved(
+            tank_id=tank_id,
+            origin=tank.position,
+            position=target,
+            facing=direction,
         )
-        body = Rect(target.x, target.y, rules.tank_size, rules.tank_size)
-        if target == tank.position or _blocked(frame, tank_id, body):
-            frame.tanks[tank_id] = tank
-            frame.emit(TankMoveBlocked(tank_id=tank_id, position=tank.position, facing=direction))
-            continue
-        moved = replace(tank, position=target)
-        frame.tanks[tank_id] = moved
-        frame.emit(
-            TankMoved(
-                tank_id=tank_id,
-                origin=tank.position,
-                position=target,
-                facing=direction,
-            )
+    )
+
+
+def _apply_conveyor(frame: _Frame, tank_id: int, start_cell: GridPos) -> None:
+    """Push ``tank_id`` once if ``start_cell`` is a conveyor. No-op otherwise."""
+    tank = frame.tanks[tank_id]
+    world = (frame.world_width, frame.world_height)
+    target = conveyor_target(frame.grid, tank.position, start_cell, world, frame.rules)
+    if target is None:
+        return
+    _displace(frame, tank_id, target)
+
+
+def _apply_teleport(
+    frame: _Frame, tank_id: int, start_cell: GridPos, pads: tuple[GridPos, GridPos]
+) -> None:
+    """Transport ``tank_id`` to the partner pad if it entered one this tick."""
+    tank = frame.tanks[tank_id]
+    cell = centre_cell(tank.position, frame.rules)
+    if cell == start_cell:
+        # Entered from nowhere: the tank was already standing here when the phase began,
+        # so it has not *arrived* and a stationary rider does not jump every tick.
+        return
+    target = teleport_target(tank.position, cell, pads, frame.rules)
+    if target is None:
+        return
+    _displace(frame, tank_id, target)
+
+
+def _displace(frame: _Frame, tank_id: int, target: Vec2) -> None:
+    """Move ``tank_id`` to ``target`` if the whole body fits there, reporting either way.
+
+    The terrain decided where; this decides whether, with the same blocking test and the
+    same "a move that moves nothing is a refusal" rule an ordinary commanded step uses --
+    which is what makes a belt running into the world edge report a blocked push rather
+    than a move to where the tank already stands. A refused displacement leaves the tank
+    exactly where it was and never pushes, swaps or overlaps anything else, so a contested
+    destination is simply lost by the higher identifier.
+
+    The facing is the tank's own and is not touched: a conveyor moves a body sideways
+    without aiming the barrel, and a pad does not spin a tank round on arrival. The
+    published :class:`~battle_city_sim.events.TankMoved` and
+    :class:`~battle_city_sim.events.TankMoveBlocked` carry it unchanged, which is what
+    lets terrain displacement reuse the existing event vocabulary instead of adding wire
+    event kinds a version 1 consumer could not read.
+    """
+    rules = frame.rules
+    tank = frame.tanks[tank_id]
+    body = Rect(target.x, target.y, rules.tank_size, rules.tank_size)
+    if target == tank.position or _blocked(frame, tank_id, body):
+        frame.emit(TankMoveBlocked(tank_id=tank_id, position=tank.position, facing=tank.facing))
+        return
+    frame.tanks[tank_id] = replace(tank, position=target)
+    frame.emit(
+        TankMoved(
+            tank_id=tank_id,
+            origin=tank.position,
+            position=target,
+            facing=tank.facing,
         )
+    )
 
 
 def _blocked(frame: _Frame, tank_id: int, body: Rect) -> bool:
