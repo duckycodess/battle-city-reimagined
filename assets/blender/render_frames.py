@@ -25,6 +25,22 @@ Blender actually holds at render time, including its own version and build hash.
 setting fails to apply, the record says what really happened rather than what was asked
 for, and the packer copies that record into the sidecar.
 
+*The camera is recorded as an offset from the cell, because it does not stand still.*
+There is one camera and it is moved onto each cell in turn, so there is no single
+``camera.location_x`` that describes a render: the forty-four frames are shot from
+forty-four places. Recording the camera's resting position instead would be worse than
+saying nothing, because it looks like an answer. What is actually constant -- and what
+makes the frames comparable -- is the camera's position *relative to the cell it is
+photographing*, so that is what the record holds, under ``camera.cell_offset_x`` and
+``camera.cell_offset_y``.
+
+Those two numbers are measured rather than declared. :func:`observe_camera` reads the
+camera and the pivot back after every single render, and :func:`constant_camera` refuses
+to write a record at all unless all forty-four observations agree. A constraint, a driver
+or a stray keyframe that moved the camera between frames would make the one-offset
+contract false, and the run stops instead of recording a number that is true of only the
+last frame.
+
 Determinism notes. Cycles runs on the CPU with a fixed seed, adaptive sampling off and
 denoising off, because OpenImageDenoise output varies with the CPU and the build. A single
 render thread is pinned for the same reason: it costs nothing at 64x64 and removes the
@@ -98,6 +114,22 @@ creates, so a renamed sprite cannot quietly stop being rendered.
 
 MANIFEST_FILENAME = "render.json"
 
+CAMERA_KEYS = (
+    "camera.cell_offset_x",
+    "camera.cell_offset_y",
+    "camera.location_z",
+    "camera.rotation_x",
+    "camera.rotation_y",
+    "camera.rotation_z",
+)
+"""The camera values :func:`observe_camera` measures once per frame.
+
+Everything here has to hold for *every* frame or the record is a fiction, so these are
+the keys :func:`constant_camera` compares across the whole run. The camera's absolute x
+and y are deliberately absent: they differ per frame by design, and the offset keys are
+what carry the same information truthfully.
+"""
+
 
 def hide_all_cells():
     for collection in bpy.data.collections:
@@ -121,7 +153,55 @@ def cell_pivot(cell_id):
     return pivot
 
 
+def observe_camera(scene, pivot):
+    """Read the camera's placement back, as an offset from the cell it is looking at.
+
+    Read, not computed from what was asked for: this runs after the camera has been moved
+    and after the frame has been written, so what it returns is the geometry that
+    produced those pixels. It is the only thing that entitles ``render.json`` to say
+    anything about the camera at all.
+    """
+    camera = scene.camera
+    return {
+        "camera.cell_offset_x": round(camera.location.x - pivot.location.x, 6),
+        "camera.cell_offset_y": round(camera.location.y - pivot.location.y, 6),
+        "camera.location_z": round(camera.location.z, 6),
+        "camera.rotation_x": round(camera.rotation_euler.x, 6),
+        "camera.rotation_y": round(camera.rotation_euler.y, 6),
+        "camera.rotation_z": round(camera.rotation_euler.z, 6),
+    }
+
+
+def constant_camera(observations):
+    """The one camera record every frame agrees on, or a hard stop naming the first that did not.
+
+    ``observations`` is ``(frame name, reading)`` in render order. The whole pack is shot
+    through one camera held in one relationship to whatever it is photographing; if that
+    stopped being true partway through the run then no single record describes the render,
+    and writing one anyway would put a plausible number in a provenance file.
+    """
+    if not observations:
+        raise SystemExit("no frame was rendered, so there is no camera to record")
+    first_name, first = observations[0]
+    for name, reading in observations[1:]:
+        differing = sorted(key for key in CAMERA_KEYS if reading[key] != first[key])
+        if differing:
+            raise SystemExit(
+                "the camera was not held the same way for every cell: %s differs from %s "
+                "in %s (%s against %s). One camera record cannot describe this render."
+                % (
+                    name,
+                    first_name,
+                    ", ".join(differing),
+                    [reading[key] for key in differing],
+                    [first[key] for key in differing],
+                )
+            )
+    return first
+
+
 def render_frame(frame_name, cell_id, degrees, output_dir):
+    """Render one frame and return what the camera actually was while it rendered."""
     scene = bpy.context.scene
     collection = cell_collection(cell_id)
     pivot = cell_pivot(cell_id)
@@ -130,8 +210,10 @@ def render_frame(frame_name, cell_id, degrees, output_dir):
     scene.camera.location = (pivot.location.x, pivot.location.y, scene.camera.location.z)
     scene.render.filepath = os.path.join(output_dir, frame_name)
     bpy.ops.render.render(write_still=True)
+    observed = observe_camera(scene, pivot)
     collection.hide_render = True
     pivot.rotation_euler = (0.0, 0.0, 0.0)
+    return observed
 
 
 def pin_threads():
@@ -140,27 +222,26 @@ def pin_threads():
     bpy.context.scene.render.threads = 1
 
 
-def record():
-    """Read the settings back out of Blender, rather than restating what was asked for."""
+def record(camera_placement):
+    """Read the settings back out of Blender, rather than restating what was asked for.
+
+    ``camera_placement`` is the reading :func:`constant_camera` certified, so the camera
+    half of this record comes from the renders themselves rather than from the camera's
+    state once the loop has finished with it.
+    """
     scene = bpy.context.scene
     camera = scene.camera
     data = camera.data
     world = scene.world.node_tree.nodes["Background"]
     color = world.inputs["Color"].default_value
-    return {
+    settings = {
         "blender.build_date": bpy.app.build_date.decode("utf-8"),
         "blender.build_hash": bpy.app.build_hash.decode("utf-8"),
         "blender.build_platform": bpy.app.build_platform.decode("utf-8"),
         "blender.version": bpy.app.version_string,
         "camera.clip_end": round(data.clip_end, 6),
         "camera.clip_start": round(data.clip_start, 6),
-        "camera.location_x": 0.0,
-        "camera.location_y": 0.0,
-        "camera.location_z": round(camera.location.z, 6),
         "camera.ortho_scale": round(data.ortho_scale, 6),
-        "camera.rotation_x": round(camera.rotation_euler.x, 6),
-        "camera.rotation_y": round(camera.rotation_euler.y, 6),
-        "camera.rotation_z": round(camera.rotation_euler.z, 6),
         "camera.type": data.type,
         "color.dither": round(scene.render.dither_intensity, 6),
         "color.display_device": scene.display_settings.display_device,
@@ -193,6 +274,9 @@ def record():
         "world.color_r": round(color[0], 6),
         "world.strength": round(world.inputs["Strength"].default_value, 6),
     }
+    for key in CAMERA_KEYS:
+        settings[key] = camera_placement[key]
+    return settings
 
 
 def parse_args(argv):
@@ -211,11 +295,13 @@ def main():
         raise SystemExit("the opened scene does not render a transparent film")
     pin_threads()
     hide_all_cells()
+    observations = []
     for frame_name, cell_id, degrees in RENDER_PLAN:
-        render_frame(frame_name, cell_id, degrees, output_dir)
+        observations.append((frame_name, render_frame(frame_name, cell_id, degrees, output_dir)))
         print("rendered %s" % frame_name)
 
-    manifest = {"frames": [row[0] for row in RENDER_PLAN], "render": record()}
+    placement = constant_camera(observations)
+    manifest = {"frames": [row[0] for row in RENDER_PLAN], "render": record(placement)}
     with open(os.path.join(output_dir, MANIFEST_FILENAME), "w", encoding="utf-8") as stream:
         json.dump(manifest, stream, indent=2, sort_keys=True)
         stream.write("\n")

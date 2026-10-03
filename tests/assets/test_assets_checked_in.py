@@ -18,7 +18,6 @@ import ast
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 from assets_helpers import (
@@ -29,6 +28,7 @@ from assets_helpers import (
     PREVIEW_PATH,
     REPO_ROOT,
     SIDECAR_PATH,
+    script_literal,
     shipped_atlas,
     shipped_metadata,
 )
@@ -67,17 +67,6 @@ SCENE = BLENDER_DIR / "starter_set.blend"
 
 BUILD_IMPORTS = {"__future__", "argparse", "bpy", "math", "mathutils", "sys"}
 RENDER_IMPORTS = {"__future__", "argparse", "bpy", "json", "math", "os", "sys"}
-
-
-def _literal(path: Path, name: str) -> Any:
-    """Read one module-level literal assignment without importing the module."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == name:
-                    return ast.literal_eval(node.value)
-    raise AssertionError(f"{path} has no module-level assignment to {name}")
 
 
 def _imports(path: Path) -> set[str]:
@@ -234,34 +223,34 @@ def test_a_blender_script_parses(path: Path) -> None:
 
 
 def test_the_render_plan_is_exactly_the_catalogue() -> None:
-    plan = _literal(RENDER_SCRIPT, "RENDER_PLAN")
+    plan = script_literal(RENDER_SCRIPT, "RENDER_PLAN")
     assert tuple(row[0] for row in plan) == catalog.FRAME_NAMES
 
 
 def test_every_rendered_cell_exists_in_the_scene_script() -> None:
-    plan = _literal(RENDER_SCRIPT, "RENDER_PLAN")
-    cells = set(_literal(BUILD_SCRIPT, "CELLS"))
+    plan = script_literal(RENDER_SCRIPT, "RENDER_PLAN")
+    cells = set(script_literal(BUILD_SCRIPT, "CELLS"))
     assert {row[1] for row in plan} <= cells
 
 
 def test_every_cell_the_scene_builds_is_rendered() -> None:
-    plan = _literal(RENDER_SCRIPT, "RENDER_PLAN")
-    assert set(_literal(BUILD_SCRIPT, "CELLS")) == {row[1] for row in plan}
+    plan = script_literal(RENDER_SCRIPT, "RENDER_PLAN")
+    assert set(script_literal(BUILD_SCRIPT, "CELLS")) == {row[1] for row in plan}
 
 
 def test_facings_are_the_four_quarter_turns() -> None:
-    plan = _literal(RENDER_SCRIPT, "RENDER_PLAN")
+    plan = script_literal(RENDER_SCRIPT, "RENDER_PLAN")
     assert {row[2] for row in plan} <= {0, 90, 180, -90}
 
 
 def test_the_scene_script_only_paints_with_palette_colours() -> None:
-    scene_palette = _literal(BUILD_SCRIPT, "PALETTE")
+    scene_palette = script_literal(BUILD_SCRIPT, "PALETTE")
     for name, color in scene_palette.items():
         assert PALETTE_NAMES.get(tuple(color)) == name, f"{name} is not a shipped palette colour"
 
 
 def test_the_shipped_palette_is_a_superset_of_the_scene_palette() -> None:
-    scene_palette = _literal(BUILD_SCRIPT, "PALETTE")
+    scene_palette = script_literal(BUILD_SCRIPT, "PALETTE")
     assert set(scene_palette) <= {name for name, _ in PALETTE}
 
 

@@ -44,10 +44,10 @@ RENDER_KEYS: Final[tuple[str, ...]] = (
     "blender.build_hash",
     "blender.build_platform",
     "blender.version",
+    "camera.cell_offset_x",
+    "camera.cell_offset_y",
     "camera.clip_end",
     "camera.clip_start",
-    "camera.location_x",
-    "camera.location_y",
     "camera.location_z",
     "camera.ortho_scale",
     "camera.rotation_x",
@@ -97,6 +97,14 @@ closed key set is checkable: anything outside this tuple is rejected rather than
 The ``post.*`` keys are the pipeline's own, applied after Blender exits; everything else
 is read back out of Blender at render time rather than copied from the script that asked
 for it, so the record describes what actually rendered.
+
+There is no ``camera.location_x`` or ``camera.location_y``, and the absence is the point.
+One camera photographs every cell in turn, so the frames are shot from as many places as
+there are frames and no single pair of coordinates is true of the render. What *is* true
+of every frame is where the camera sits relative to the cell in front of it, so that is
+what the table carries: ``camera.cell_offset_x`` and ``camera.cell_offset_y``, measured
+after each render and written only if all of them agreed. ``camera.location_z`` survives
+because the camera's height genuinely does not change. See ``render_frames.py``.
 """
 
 RENDER_KEY_SET: Final[frozenset[str]] = frozenset(RENDER_KEYS)

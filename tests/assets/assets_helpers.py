@@ -12,10 +12,11 @@ It also keeps the tests away from the client: nothing here imports pygame, and
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from battle_city_tools.assets import catalog
 from battle_city_tools.assets.metadata import (
@@ -48,6 +49,22 @@ COMPOSITE_PATH: Final[Path] = PACK_DIR / "stage-composite.png"
 
 SYNTHETIC_WIDTH: Final[int] = 32
 SYNTHETIC_FRAMES: Final[tuple[str, ...]] = ("alpha", "beta", "gamma", "delta")
+
+
+def script_literal(path: Path, name: str) -> Any:
+    """Read one module-level literal assignment out of a script without importing it.
+
+    The Blender scripts cannot be imported in this process -- they begin with ``import
+    bpy`` -- but their tables are plain literals, and a test that wants to know which
+    cells the scene builds should read them from the file rather than keep a second copy.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return ast.literal_eval(node.value)
+    raise AssertionError(f"{path} has no module-level assignment to {name}")
 
 
 def shipped_metadata() -> AtlasMetadata:

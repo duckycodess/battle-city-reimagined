@@ -69,12 +69,41 @@ under `render`. The record therefore describes what rendered, not what was reque
 | Pixel filter | `BLACKMAN_HARRIS`, width 1.0 |
 | Film | `film_transparent` on, no motion blur, no compositor, no sequencer |
 | Resolution | 64x64 at 100% -- a 16-pixel frame supersampled 4x |
-| Camera | `ORTHO`, `ortho_scale` 1.0, at z 6.0, rotation (0, 0, 0), clip 0.1 to 100.0 |
+| Camera | `ORTHO`, `ortho_scale` 1.0, at z 6.0, rotation (0, 0, 0), clip 0.1 to 100.0, offset (0, 0) from the cell it is photographing |
 | Colour management | view transform `Standard`, look `None`, display `sRGB`, exposure 0, gamma 1, dither 0, sequencer `sRGB` |
 | Output | PNG, `RGBA`, 8-bit, compression 15 |
 | World | colour (0.16, 0.18, 0.24) at strength 0.35 |
 | Key light | sun, energy 2.9, angle 0, direction (0.45, -0.45, -0.77) |
 | Fill light | sun, energy 0.9, angle 0, direction (-0.35, 0.3, -0.89) |
+
+### The camera record is an offset, not a location
+
+There is one camera and it is moved onto each cell in turn, so the forty-four frames are
+shot from forty-four places and no single `camera.location_x` is true of the render.
+Recording the camera's resting position instead would be worse than recording nothing,
+because it reads like an answer. What *is* constant, and what actually makes the frames
+comparable, is where the camera sits relative to the cell in front of it, so that is what
+`render.json` and `atlas.json` carry:
+
+| Key | Meaning |
+| --- | --- |
+| `camera.cell_offset_x`, `camera.cell_offset_y` | The camera's position **minus the rendered cell's pivot position**, in world units (one unit is one tile). `0.0, 0.0` here: the camera is placed exactly over the cell origin. |
+| `camera.location_z` | The camera's height, which genuinely does not change between frames. |
+| `camera.rotation_x/y/z` | The camera's orientation, which likewise does not change: facings turn the object. |
+
+Those numbers are measured, not declared. `render_frames.observe_camera` reads the camera
+and the cell pivot back *after every single render*, and `render_frames.constant_camera`
+refuses to write `render.json` at all unless all forty-four readings agree -- a constraint,
+a driver or a stray keyframe that moved the camera between frames makes the one-offset
+contract false, and the run stops rather than record a number true only of the last frame.
+`tests/assets/test_assets_render_camera.py` runs the real script against a Blender-shaped
+fake and checks all of this as behaviour: that the camera visits every cell, that the
+recorded offset follows a camera placed somewhere else, and that an inconsistent run
+writes no record.
+
+To convert an offset into the absolute camera position for a given frame, add the pivot
+location of the frame's cell: cell *i* sits at `((i % 8) * 2.0, -(i // 8) * 2.0, 0.0)` in
+`CELLS` order in `build_scene.py`.
 
 `Standard` rather than AgX or Filmic, and dither 0, because the materials are the shipped
 palette and the render is supposed to come back out as those colours rather than as a
