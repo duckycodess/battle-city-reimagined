@@ -13,6 +13,15 @@ different on every contributor's machine.
 The terminal capture is taken from a state the test assembled and is stamped with a
 banner that says so. The client cannot reach an outcome in this build, and a screenshot
 that did not say which kind it was would be a claim the code does not support.
+
+The three gimmick captures are ordinary gameplay and ordinary editing. The stage is the
+bundled sample pack, loaded through :func:`battle_city_client.stage_adapter.resolve_pack`
+exactly as ``--pack gimmick-demo`` loads it, handed to a real ``ClientShell``, started
+through the menu and advanced with the intents a held key produces. The editor capture
+opens that same level in a real ``EditorDocument``, paints through a real ``EditorState``
+and is drawn by the real ``EditorRenderer``. Nothing here is composited, overlaid or
+drawn by the test: a synthetic picture of a feature is not evidence that the feature
+works, which is why the one assembled state in this file is labelled in its own filename.
 """
 
 from __future__ import annotations
@@ -24,14 +33,22 @@ from pathlib import Path
 import pygame
 import pytest
 from battle_city_client import Action, PlayerIntent, theme
+from battle_city_client.editor.document import EditorDocument
+from battle_city_client.editor.state import EditorState, Tool
 from battle_city_client.shell import ClientShell, Screen
-from battle_city_client.stage_adapter import bundled_stage_catalog
-from battle_city_sim import DEFAULT_RULES, Direction, RunOutcome
+from battle_city_client.stage_adapter import (
+    bundled_stage_catalog,
+    pack_stage_catalog,
+    resolve_pack,
+)
+from battle_city_content import GIMMICK_DEMO_PACK_PATH, GridCell, TileCode
+from battle_city_sim import DEFAULT_RULES, Direction, RunOutcome, Tile, centre_cell
 from client_helpers import (
     REFRESH_CAPTURES_ENV,
     SCREENSHOT_DIR,
     capture,
     capture_directory,
+    capture_editor_state,
     finished_session,
     make_shell,
     observed,
@@ -46,8 +63,33 @@ EXPECTED_CAPTURES = (
     "04-stage-and-hud.png",
     "05-pause.png",
     "06-run-over-TEST-FIXTURE.png",
+    "07-gimmick-conveyors.png",
+    "08-gimmick-teleport-pads.png",
+    "09-gimmick-editor.png",
 )
 MAX_CAPTURE_BYTES = 256 * 1024
+
+GIMMICK_PACK = "gimmick-demo"
+GIMMICK_LEVEL = "gimmick-demo-01"
+
+BELT_TICKS = 16
+"""Held UP from the spawn: far enough to be standing on the loop's westward belt.
+
+The tank is driving north while the belt carries it west, which is the behaviour the
+capture is for. The exact number is pinned because the image is: a different count is a
+different picture, and the assertions below say which one.
+"""
+
+PAD_APPROACH_TICKS = 12
+PAD_TRANSIT_TICKS = 37
+"""Held RIGHT then held UP: the shortest route from the spawn onto the inner pad.
+
+On the last of those ticks the tank's centre enters the pad at (8, 7) and the server-side
+rule transports it to the partner at (2, 2), keeping its pixel offset -- which is how a
+tank driving north out of the middle of the board ends the tick in the top-left corner.
+The capture is of the arrival.
+"""
+PAD_ARRIVAL_CELL = (2, 2)
 
 
 @pytest.fixture
@@ -58,6 +100,42 @@ def captures(tmp_path: Path) -> Path:
 
 def _bundled_shell() -> ClientShell:
     return ClientShell(catalog=bundled_stage_catalog())
+
+
+def _gimmick_shell() -> ClientShell:
+    """The bundled sample pack, reached the way ``--pack gimmick-demo`` reaches it."""
+    return ClientShell(catalog=pack_stage_catalog(GIMMICK_PACK))
+
+
+def _gimmick_run(*held: tuple[int, Direction]) -> ClientShell:
+    """Start the sample stage from the menu and play it with held directions, in order."""
+    shell = _gimmick_shell()
+    shell.handle(Action.UI_CONFIRM)
+    shell.handle(Action.UI_CONFIRM)
+    for ticks, direction in held:
+        shell.advance(ticks, PlayerIntent(direction=direction))
+    return shell
+
+
+def _player_cell(shell: ClientShell) -> tuple[GridCell, Tile]:
+    """Which cell the player's tank is standing in, and what is under it."""
+    session = shell.session
+    assert session is not None
+    tank = next(iter(session.state.tanks))
+    cell = centre_cell(tank.position, DEFAULT_RULES)
+    return GridCell(cell.x, cell.y), session.state.grid.at(cell)
+
+
+def _authored_editor_state() -> EditorState:
+    """The sample level open in the editor, with the pad swatch selected and checked."""
+    pack = resolve_pack(GIMMICK_PACK)
+    level = pack.level(GIMMICK_LEVEL)
+    state = EditorState(document=EditorDocument.from_level(level))
+    state.select_tile(list(TileCode).index(TileCode.TELEPORT_PAD))
+    state.set_tool(Tool.PAINT)
+    state.hover = GridCell(8, 7)
+    state.check()
+    return state
 
 
 def _played_shell() -> ClientShell:
@@ -125,6 +203,44 @@ def test_capture_the_injected_terminal_screen(captures: Path) -> None:
     assert path.stat().st_size > 0
 
 
+def test_capture_a_tank_riding_a_conveyor(captures: Path) -> None:
+    """Real gameplay on the sample stage: the player is on the belt loop, being carried."""
+    shell = _gimmick_run((BELT_TICKS, Direction.UP))
+    assert observed(shell.screen) is Screen.PLAYING
+    _, tile = _player_cell(shell)
+    assert tile is Tile.CONVEYOR_W, "the capture is of a tank standing on the belt"
+    path = capture(shell, "07-gimmick-conveyors", scale=CAPTURE_SCALE, directory=captures)
+    assert path.stat().st_size > 0
+
+
+def test_capture_the_paired_teleport_pads(captures: Path) -> None:
+    """Real gameplay again: the player drove into one pad and came out of the other."""
+    shell = _gimmick_run((PAD_APPROACH_TICKS, Direction.RIGHT), (PAD_TRANSIT_TICKS, Direction.UP))
+    assert observed(shell.screen) is Screen.PLAYING
+    session = shell.session
+    assert session is not None
+    assert len(session.state.grid.positions_of(Tile.TELEPORT_PAD)) == 2
+
+    cell, tile = _player_cell(shell)
+    assert tile is Tile.TELEPORT_PAD
+    assert (cell.x, cell.y) == PAD_ARRIVAL_CELL, (
+        "the tank is on the partner pad, which it can only have reached by transport"
+    )
+    path = capture(shell, "08-gimmick-teleport-pads", scale=CAPTURE_SCALE, directory=captures)
+    assert path.stat().st_size > 0
+
+
+def test_capture_the_sample_stage_open_in_the_editor(captures: Path) -> None:
+    """A real editor frame of the authored sample: palette, pads, and a passing check."""
+    state = _authored_editor_state()
+    assert state.valid
+    assert state.selected_tile is TileCode.TELEPORT_PAD
+    assert len(state.document.teleport_pads) == 2
+    assert state.document.effective_schema_version == 2
+    path = capture_editor_state(state, "09-gimmick-editor", scale=CAPTURE_SCALE, directory=captures)
+    assert path.stat().st_size > 0
+
+
 def test_write_the_capture_notes(captures: Path) -> None:
     """Record what produced the images, since a screenshot without them proves little."""
     path = captures / "README.md"
@@ -188,6 +304,9 @@ alone. To refresh the tracked images after a deliberate visual change:
 | `04-stage-and-hud.png` | Classic stage 1 after {STAGE_TICKS} ticks of held movement and fire |
 | `05-pause.png` | Pause menu over the same run |
 | `06-run-over-TEST-FIXTURE.png` | Terminal screen from an **injected** simulation state |
+| `07-gimmick-conveyors.png` | Sample stage, {BELT_TICKS} ticks of held UP, tank on the belt |
+| `08-gimmick-teleport-pads.png` | Sample stage, the tank just after a paired-pad transport |
+| `09-gimmick-editor.png` | The same level in the editor, pad swatch selected, check passing |
 
 ## How they were taken
 
@@ -206,6 +325,24 @@ alone. To refresh the tracked images after a deliberate visual change:
 These last rows are why the images are not regenerated on every run: they describe one
 machine, and rewriting them from an unrelated test run would replace a deliberate record
 with whichever machine happened to run the suite.
+
+## The gimmick captures
+
+`07`, `08` and `09` are the opt-in level schema version 2 terrain. The stage is the
+bundled sample pack `{GIMMICK_PACK}` (`{GIMMICK_DEMO_PACK_PATH}`), loaded through the same
+`resolve_pack` path `--pack {GIMMICK_PACK}` uses. The two gameplay shots are a real run:
+the menu is confirmed twice and the run is advanced with the intents a held key produces,
+so the tank's position in each image is one the simulation reached. In `08` the tank is
+standing on the partner pad at {PAD_ARRIVAL_CELL}, which it can only have reached by being
+transported there. The editor shot is a
+real `EditorRenderer` frame of that level open in a real `EditorDocument`, with the
+teleport-pad swatch selected and an explicit check passing. None of the three is a
+composite, and nothing is drawn onto them by the test -- only `06`, the assembled
+terminal state, carries a stamp, and it says so in its own filename.
+
+The default menu still lists the three classic stages. The sample is reached by naming
+it: `--pack {GIMMICK_PACK}` at launch, `pack_stage_catalog` from the catalog API, or the
+editor.
 
 ## The fixture capture
 

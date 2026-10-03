@@ -17,6 +17,9 @@ BATTLE_CITY_REFRESH_CAPTURES=1 uv run --locked pytest tests/client/test_client_s
 | `04-stage-and-hud.png` | Classic stage 1 after 150 ticks of held movement and fire |
 | `05-pause.png` | Pause menu over the same run |
 | `06-run-over-TEST-FIXTURE.png` | Terminal screen from an **injected** simulation state |
+| `07-gimmick-conveyors.png` | Sample stage, 16 ticks of held UP, tank on the belt |
+| `08-gimmick-teleport-pads.png` | Sample stage, the tank just after a paired-pad transport |
+| `09-gimmick-editor.png` | The same level in the editor, pad swatch selected, check passing |
 
 ## How they were taken
 
@@ -35,6 +38,24 @@ BATTLE_CITY_REFRESH_CAPTURES=1 uv run --locked pytest tests/client/test_client_s
 These last rows are why the images are not regenerated on every run: they describe one
 machine, and rewriting them from an unrelated test run would replace a deliberate record
 with whichever machine happened to run the suite.
+
+## The gimmick captures
+
+`07`, `08` and `09` are the opt-in level schema version 2 terrain. The stage is the
+bundled sample pack `gimmick-demo` (`packs/gimmick-demo.json`), loaded through the same
+`resolve_pack` path `--pack gimmick-demo` uses. The two gameplay shots are a real run:
+the menu is confirmed twice and the run is advanced with the intents a held key produces,
+so the tank's position in each image is one the simulation reached. In `08` the tank is
+standing on the partner pad at (2, 2), which it can only have reached by being
+transported there. The editor shot is a
+real `EditorRenderer` frame of that level open in a real `EditorDocument`, with the
+teleport-pad swatch selected and an explicit check passing. None of the three is a
+composite, and nothing is drawn onto them by the test -- only `06`, the assembled
+terminal state, carries a stamp, and it says so in its own filename.
+
+The default menu still lists the three classic stages. The sample is reached by naming
+it: `--pack gimmick-demo` at launch, `pack_stage_catalog` from the catalog API, or the
+editor.
 
 ## The fixture capture
 
