@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/duckycodess/battle-city-reimagined/blob/main/packages/content/src/battle_city_content/schemas/classic-level.v2.schema.json",
+  "title": "Battle City Reimagined gimmick level",
+  "description": "A 16x16 level in the opt-in gimmick format, schema_version 2, accepted as the gimmicks-v1 change. It is version 1 plus five tile codes: 9, A, B and C are the north, east, south and west conveyors and D is a teleport pad. Everything else -- the grid dimensions, the spawn shapes, the provenance block and the wave block -- is unchanged, so a version 1 level upgrades by changing one number and painting new tiles. This file is the schema for schema_version 2 and keeps its own path and $id; classic-level.schema.json stays exactly as it was, which is what keeps levels pinned to version 1 loading byte for byte. The pad count is not expressible as a row pattern, so the loader enforces zero-or-exactly-two separately.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "grid",
+    "spawns"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "id": {
+      "description": "Stable identifier. Renaming a level is a new identifier, not an edit.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "source": {
+      "description": "Provenance for a converted level. Absent for levels authored here; no licence is asserted over converted data, which the pack manifest states.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "revision",
+        "path"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^https://[^\\s]+$"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "grid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height",
+        "rows"
+      ],
+      "properties": {
+        "width": {
+          "const": 16
+        },
+        "height": {
+          "const": 16
+        },
+        "rows": {
+          "description": "Top-to-bottom rows of left-to-right tile codes. 0-8 are the classic tiles the content specification defines; 9/A/B/C are the north/east/south/west conveyors and D is a teleport pad.",
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9A-D]{16}$"
+          }
+        }
+      }
+    },
+    "spawns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "players",
+        "enemies"
+      ],
+      "properties": {
+        "players": {
+          "description": "The upper bound is grid capacity, not a game rule: spawns must be distinct empty cells, so a 16x16 grid cannot hold more than 256 of them. Slot numbering is unbounded above; the loader rejects duplicate slots and shared cells.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/playerSpawn"
+          }
+        },
+        "enemies": {
+          "description": "Bounded by grid capacity, as for players.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/spawn"
+          }
+        }
+      }
+    },
+    "waves": {
+      "description": "Optional, forward-declared enemy waves. A wave states only how many enemy tanks it releases; variant mix, cadence and win timing belong to the campaign phase that owns wave behaviour. Nothing in the content package interprets this field, and the converted classic levels omit it because the historical stage data carries no wave information.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enemies"
+        ],
+        "properties": {
+          "enemies": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "spawn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        }
+      }
+    },
+    "playerSpawn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "slot"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "slot": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}
