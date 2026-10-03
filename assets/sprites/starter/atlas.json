@@ -1,0 +1,1466 @@
+{
+  "schema_version": 1,
+  "pack_id": "starter",
+  "generator": "battle_city_tools.assets",
+  "atlas": {
+    "path": "atlas.png",
+    "width": 128,
+    "height": 96,
+    "sha256_pixels": "6a014e92ac50b22adfb48a7b324e2c0391693bc63b34e63676ffb7314a31e419"
+  },
+  "frame_size": [
+    16,
+    16
+  ],
+  "layout": {
+    "algorithm": "shelf-v1",
+    "sort_key": "name",
+    "atlas_width": 128,
+    "padding": 0
+  },
+  "render": {
+    "blender.build_date": "2026-09-15",
+    "blender.build_hash": "62c1db4208e8",
+    "blender.build_platform": "Linux",
+    "blender.version": "4.5.14 LTS",
+    "camera.cell_offset_x": 0.0,
+    "camera.cell_offset_y": 0.0,
+    "camera.clip_end": 100.0,
+    "camera.clip_start": 0.1,
+    "camera.location_z": 6.0,
+    "camera.ortho_scale": 1.0,
+    "camera.rotation_x": 0.0,
+    "camera.rotation_y": 0.0,
+    "camera.rotation_z": 0.0,
+    "camera.type": "ORTHO",
+    "color.dither": 0.0,
+    "color.display_device": "sRGB",
+    "color.exposure": 0.0,
+    "color.gamma": 1.0,
+    "color.look": "None",
+    "color.sequencer_colorspace": "sRGB",
+    "color.view_transform": "Standard",
+    "cycles.adaptive_sampling": false,
+    "cycles.denoising": false,
+    "cycles.device": "CPU",
+    "cycles.diffuse_bounces": 1,
+    "cycles.max_bounces": 1,
+    "cycles.samples": 96,
+    "cycles.seed": 0,
+    "engine": "CYCLES",
+    "filter_width": 1.0,
+    "output.color_depth": "8",
+    "output.color_mode": "RGBA",
+    "output.compression": 15,
+    "output.file_format": "PNG",
+    "pixel_filter": "BLACKMAN_HARRIS",
+    "post.alpha_threshold": 128,
+    "post.downsample": "box-premultiplied",
+    "post.palette_size": 43,
+    "post.quantize": "nearest-palette-srgb",
+    "post.supersample": 4,
+    "render.resolution_percentage": 100,
+    "render.resolution_x": 64,
+    "render.resolution_y": 64,
+    "render.threads": 1,
+    "render.threads_mode": "FIXED",
+    "world.color_b": 0.24,
+    "world.color_g": 0.18,
+    "world.color_r": 0.16,
+    "world.strength": 0.35
+  },
+  "authors": [
+    "Battle City Reimagined contributors"
+  ],
+  "license": {
+    "spdx_id": "NOASSERTION",
+    "notice": "Every mesh, material and light in these frames was authored by the build script in this repository and rendered by its render script. No artwork, texture or sprite sheet from the historical duckycodess/Battle-City repository was copied, traced or re-encoded, and no generated image is a runtime dependency. The repository publishes no licence file, so this pack asserts none on its owner's behalf; NOASSERTION is the SPDX value for exactly that, matching the bundled content pack."
+  },
+  "palette": [
+    {
+      "name": "void",
+      "rgb": [
+        10,
+        12,
+        18
+      ]
+    },
+    {
+      "name": "ground",
+      "rgb": [
+        18,
+        20,
+        27
+      ]
+    },
+    {
+      "name": "ground-speck",
+      "rgb": [
+        26,
+        29,
+        38
+      ]
+    },
+    {
+      "name": "panel",
+      "rgb": [
+        24,
+        28,
+        38
+      ]
+    },
+    {
+      "name": "panel-edge",
+      "rgb": [
+        58,
+        68,
+        88
+      ]
+    },
+    {
+      "name": "tread",
+      "rgb": [
+        32,
+        36,
+        46
+      ]
+    },
+    {
+      "name": "stone-shadow",
+      "rgb": [
+        66,
+        72,
+        86
+      ]
+    },
+    {
+      "name": "stone-dark",
+      "rgb": [
+        104,
+        112,
+        128
+      ]
+    },
+    {
+      "name": "stone-mid",
+      "rgb": [
+        130,
+        139,
+        154
+      ]
+    },
+    {
+      "name": "stone",
+      "rgb": [
+        158,
+        166,
+        180
+      ]
+    },
+    {
+      "name": "brick-mortar",
+      "rgb": [
+        58,
+        34,
+        26
+      ]
+    },
+    {
+      "name": "brick-dark",
+      "rgb": [
+        120,
+        62,
+        40
+      ]
+    },
+    {
+      "name": "brick-mid",
+      "rgb": [
+        148,
+        79,
+        51
+      ]
+    },
+    {
+      "name": "brick",
+      "rgb": [
+        176,
+        96,
+        62
+      ]
+    },
+    {
+      "name": "crack",
+      "rgb": [
+        238,
+        226,
+        206
+      ]
+    },
+    {
+      "name": "water-deep",
+      "rgb": [
+        26,
+        56,
+        96
+      ]
+    },
+    {
+      "name": "water",
+      "rgb": [
+        44,
+        92,
+        152
+      ]
+    },
+    {
+      "name": "water-mid",
+      "rgb": [
+        68,
+        122,
+        182
+      ]
+    },
+    {
+      "name": "water-crest",
+      "rgb": [
+        96,
+        154,
+        214
+      ]
+    },
+    {
+      "name": "forest-dark",
+      "rgb": [
+        24,
+        62,
+        36
+      ]
+    },
+    {
+      "name": "forest",
+      "rgb": [
+        46,
+        106,
+        62
+      ]
+    },
+    {
+      "name": "forest-mid",
+      "rgb": [
+        64,
+        136,
+        80
+      ]
+    },
+    {
+      "name": "forest-leaf",
+      "rgb": [
+        84,
+        168,
+        100
+      ]
+    },
+    {
+      "name": "mirror-dark",
+      "rgb": [
+        120,
+        132,
+        156
+      ]
+    },
+    {
+      "name": "mirror-mid",
+      "rgb": [
+        164,
+        174,
+        196
+      ]
+    },
+    {
+      "name": "mirror",
+      "rgb": [
+        206,
+        216,
+        234
+      ]
+    },
+    {
+      "name": "home-dark",
+      "rgb": [
+        146,
+        118,
+        40
+      ]
+    },
+    {
+      "name": "home-mid",
+      "rgb": [
+        192,
+        166,
+        80
+      ]
+    },
+    {
+      "name": "home",
+      "rgb": [
+        238,
+        214,
+        120
+      ]
+    },
+    {
+      "name": "player-dark",
+      "rgb": [
+        44,
+        118,
+        168
+      ]
+    },
+    {
+      "name": "player-mid",
+      "rgb": [
+        74,
+        158,
+        208
+      ]
+    },
+    {
+      "name": "player",
+      "rgb": [
+        108,
+        198,
+        244
+      ]
+    },
+    {
+      "name": "enemy-dark",
+      "rgb": [
+        150,
+        54,
+        48
+      ]
+    },
+    {
+      "name": "enemy-mid",
+      "rgb": [
+        192,
+        80,
+        72
+      ]
+    },
+    {
+      "name": "enemy",
+      "rgb": [
+        236,
+        108,
+        96
+      ]
+    },
+    {
+      "name": "powerup-fill",
+      "rgb": [
+        52,
+        44,
+        22
+      ]
+    },
+    {
+      "name": "powerup-frame",
+      "rgb": [
+        246,
+        190,
+        64
+      ]
+    },
+    {
+      "name": "danger",
+      "rgb": [
+        232,
+        84,
+        72
+      ]
+    },
+    {
+      "name": "ok",
+      "rgb": [
+        124,
+        208,
+        132
+      ]
+    },
+    {
+      "name": "text-dim",
+      "rgb": [
+        134,
+        146,
+        168
+      ]
+    },
+    {
+      "name": "text",
+      "rgb": [
+        226,
+        232,
+        240
+      ]
+    },
+    {
+      "name": "shot-enemy",
+      "rgb": [
+        252,
+        214,
+        150
+      ]
+    },
+    {
+      "name": "shot-player",
+      "rgb": [
+        238,
+        244,
+        252
+      ]
+    }
+  ],
+  "hitboxes": {
+    "none": null,
+    "projectile": [
+      3,
+      3
+    ],
+    "tank": [
+      16,
+      16
+    ],
+    "tile": [
+      16,
+      16
+    ]
+  },
+  "sources": [
+    {
+      "source_id": "starter-set/effects",
+      "scene": "assets/blender/starter_set.blend",
+      "build_script": "assets/blender/build_scene.py",
+      "render_script": "assets/blender/render_frames.py",
+      "collection": "effects",
+      "authors": [
+        "Battle City Reimagined contributors"
+      ],
+      "spdx_id": "NOASSERTION",
+      "notice": "Every mesh, material and light in these frames was authored by the build script in this repository and rendered by its render script. No artwork, texture or sprite sheet from the historical duckycodess/Battle-City repository was copied, traced or re-encoded, and no generated image is a runtime dependency. The repository publishes no licence file, so this pack asserts none on its owner's behalf; NOASSERTION is the SPDX value for exactly that, matching the bundled content pack."
+    },
+    {
+      "source_id": "starter-set/powerups",
+      "scene": "assets/blender/starter_set.blend",
+      "build_script": "assets/blender/build_scene.py",
+      "render_script": "assets/blender/render_frames.py",
+      "collection": "powerups",
+      "authors": [
+        "Battle City Reimagined contributors"
+      ],
+      "spdx_id": "NOASSERTION",
+      "notice": "Every mesh, material and light in these frames was authored by the build script in this repository and rendered by its render script. No artwork, texture or sprite sheet from the historical duckycodess/Battle-City repository was copied, traced or re-encoded, and no generated image is a runtime dependency. The repository publishes no licence file, so this pack asserts none on its owner's behalf; NOASSERTION is the SPDX value for exactly that, matching the bundled content pack."
+    },
+    {
+      "source_id": "starter-set/projectiles",
+      "scene": "assets/blender/starter_set.blend",
+      "build_script": "assets/blender/build_scene.py",
+      "render_script": "assets/blender/render_frames.py",
+      "collection": "projectiles",
+      "authors": [
+        "Battle City Reimagined contributors"
+      ],
+      "spdx_id": "NOASSERTION",
+      "notice": "Every mesh, material and light in these frames was authored by the build script in this repository and rendered by its render script. No artwork, texture or sprite sheet from the historical duckycodess/Battle-City repository was copied, traced or re-encoded, and no generated image is a runtime dependency. The repository publishes no licence file, so this pack asserts none on its owner's behalf; NOASSERTION is the SPDX value for exactly that, matching the bundled content pack."
+    },
+    {
+      "source_id": "starter-set/tanks",
+      "scene": "assets/blender/starter_set.blend",
+      "build_script": "assets/blender/build_scene.py",
+      "render_script": "assets/blender/render_frames.py",
+      "collection": "tanks",
+      "authors": [
+        "Battle City Reimagined contributors"
+      ],
+      "spdx_id": "NOASSERTION",
+      "notice": "Every mesh, material and light in these frames was authored by the build script in this repository and rendered by its render script. No artwork, texture or sprite sheet from the historical duckycodess/Battle-City repository was copied, traced or re-encoded, and no generated image is a runtime dependency. The repository publishes no licence file, so this pack asserts none on its owner's behalf; NOASSERTION is the SPDX value for exactly that, matching the bundled content pack."
+    },
+    {
+      "source_id": "starter-set/terrain",
+      "scene": "assets/blender/starter_set.blend",
+      "build_script": "assets/blender/build_scene.py",
+      "render_script": "assets/blender/render_frames.py",
+      "collection": "terrain",
+      "authors": [
+        "Battle City Reimagined contributors"
+      ],
+      "spdx_id": "NOASSERTION",
+      "notice": "Every mesh, material and light in these frames was authored by the build script in this repository and rendered by its render script. No artwork, texture or sprite sheet from the historical duckycodess/Battle-City repository was copied, traced or re-encoded, and no generated image is a runtime dependency. The repository publishes no licence file, so this pack asserts none on its owner's behalf; NOASSERTION is the SPDX value for exactly that, matching the bundled content pack."
+    }
+  ],
+  "frames": [
+    {
+      "name": "effect-explosion-0",
+      "group": "effect",
+      "source_id": "starter-set/effects",
+      "hitbox": "none",
+      "rect": [
+        0,
+        0,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "631287b59d581119f9c1813e0d16009aaeb019de8c6c036de236588edb3fd227",
+      "description": "Explosion, frame 0: a tight core."
+    },
+    {
+      "name": "effect-explosion-1",
+      "group": "effect",
+      "source_id": "starter-set/effects",
+      "hitbox": "none",
+      "rect": [
+        16,
+        0,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "b7acf205e3b17b380836399d89611d1388d073340e2665a484a15219d29d0560",
+      "description": "Explosion, frame 1: the core breaks into spokes."
+    },
+    {
+      "name": "effect-explosion-2",
+      "group": "effect",
+      "source_id": "starter-set/effects",
+      "hitbox": "none",
+      "rect": [
+        32,
+        0,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "a175eda9407f069e81ecb2805d554b821a99b693c38c9b18d3364619b51eeb64",
+      "description": "Explosion, frame 2: spokes at full reach."
+    },
+    {
+      "name": "effect-explosion-3",
+      "group": "effect",
+      "source_id": "starter-set/effects",
+      "hitbox": "none",
+      "rect": [
+        48,
+        0,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "5a7b12878335cd5d1e572819bf9beb4505b3e0c78149eb9f1ebd44ed0de9dfba",
+      "description": "Explosion, frame 3: scattered embers."
+    },
+    {
+      "name": "effect-shield-0",
+      "group": "effect",
+      "source_id": "starter-set/effects",
+      "hitbox": "none",
+      "rect": [
+        64,
+        0,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "5a1130417219188ec9ee500771d29ac5085127073e550de821a3f5c1622412d1",
+      "description": "Invincibility ring, phase 0: six segments on the axes."
+    },
+    {
+      "name": "effect-shield-1",
+      "group": "effect",
+      "source_id": "starter-set/effects",
+      "hitbox": "none",
+      "rect": [
+        80,
+        0,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "abdf97b85251744e76e380664f04d990ab104c89fcb9b1001077980dba3c8993",
+      "description": "Invincibility ring, phase 1: the same ring, rotated."
+    },
+    {
+      "name": "effect-spawn-0",
+      "group": "effect",
+      "source_id": "starter-set/effects",
+      "hitbox": "none",
+      "rect": [
+        96,
+        0,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "2f9c5b79b33a620035f1fc14bb585d50febb31e73c71dd02c9f3caf40363bae0",
+      "description": "Spawn mark, frame 0: four wedges far out."
+    },
+    {
+      "name": "effect-spawn-1",
+      "group": "effect",
+      "source_id": "starter-set/effects",
+      "hitbox": "none",
+      "rect": [
+        112,
+        0,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "852be9343308ebe6362219bd2d72ed86c1b3114f14ab52e3226f1ef5df57c18d",
+      "description": "Spawn mark, frame 1: the wedges closing in."
+    },
+    {
+      "name": "effect-spawn-2",
+      "group": "effect",
+      "source_id": "starter-set/effects",
+      "hitbox": "none",
+      "rect": [
+        0,
+        16,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "9f0e858c57ef8db04dc1dd2f2559cb0f7a772915815214812ab9c5cd5ac81029",
+      "description": "Spawn mark, frame 2: the wedges meeting at the centre."
+    },
+    {
+      "name": "powerup-extra-life",
+      "group": "powerup",
+      "source_id": "starter-set/powerups",
+      "hitbox": "tile",
+      "rect": [
+        16,
+        16,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "1587acef935f34cc3b02a17fe225ba479acfdf8c3e7f3dc08a6a737c59818423",
+      "description": "Extra life pickup: a thick cross on a framed plate."
+    },
+    {
+      "name": "powerup-gatling",
+      "group": "powerup",
+      "source_id": "starter-set/powerups",
+      "hitbox": "tile",
+      "rect": [
+        32,
+        16,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "618e192bffd2f92d790075ed8a8fc24c6797ed04ad1f0a747ba667cd293b6ed6",
+      "description": "Gatling pickup: three stacked barrels on a framed plate."
+    },
+    {
+      "name": "powerup-invincibility",
+      "group": "powerup",
+      "source_id": "starter-set/powerups",
+      "hitbox": "tile",
+      "rect": [
+        48,
+        16,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "2e4b4cee06e5d49d390e4d86a0bc57a55e2e2662d864672143009ef02a59eb1c",
+      "description": "Invincibility pickup: a shield boss on a framed plate."
+    },
+    {
+      "name": "shot-down",
+      "group": "projectile",
+      "source_id": "starter-set/projectiles",
+      "hitbox": "projectile",
+      "rect": [
+        64,
+        16,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "72b5d8ab0f9e391d1d6caf2045efe94f088de3509e94316f4cc3f67728665eca",
+      "description": "Projectile travelling down, drawn around its centre pixel."
+    },
+    {
+      "name": "shot-left",
+      "group": "projectile",
+      "source_id": "starter-set/projectiles",
+      "hitbox": "projectile",
+      "rect": [
+        80,
+        16,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "c6d3f1428ea20124a1e991ce2127d620538a80c05d00ab0b8f054b66cb7feb52",
+      "description": "Projectile travelling left, drawn around its centre pixel."
+    },
+    {
+      "name": "shot-right",
+      "group": "projectile",
+      "source_id": "starter-set/projectiles",
+      "hitbox": "projectile",
+      "rect": [
+        96,
+        16,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "2a3521448f608c6cdb34a48c6bd41e4dc8c2948b965841d1b93b5eb3282f6f96",
+      "description": "Projectile travelling right, drawn around its centre pixel."
+    },
+    {
+      "name": "shot-up",
+      "group": "projectile",
+      "source_id": "starter-set/projectiles",
+      "hitbox": "projectile",
+      "rect": [
+        112,
+        16,
+        16,
+        16
+      ],
+      "pivot": [
+        8,
+        8
+      ],
+      "sha256_pixels": "08e0d542e883339b416914df0f4617cb712b929b1cfa726e51aba9ba03e02948",
+      "description": "Projectile travelling up, drawn around its centre pixel."
+    },
+    {
+      "name": "tank-enemy-normal-down",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        0,
+        32,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "cf8163c0a5f14abed4dd0130a456ce757d6f580badc3c1b27c48e269d64adc54",
+      "description": "Enemy tank, variant 1: red hull with a single turret eye. Facing down."
+    },
+    {
+      "name": "tank-enemy-normal-left",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        16,
+        32,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "17b3c98265b3f5778851a6289c320def1d10223689f8aa39256337cebbb1342d",
+      "description": "Enemy tank, variant 1: red hull with a single turret eye. Facing left."
+    },
+    {
+      "name": "tank-enemy-normal-right",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        32,
+        32,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "10eed2072cf6ad9fe811a280b6df94c556071fd7fd2322b552d313b72a46fb0f",
+      "description": "Enemy tank, variant 1: red hull with a single turret eye. Facing right."
+    },
+    {
+      "name": "tank-enemy-normal-up",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        48,
+        32,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "87b130cf5be2371de65f2afb32af19a175075de0a2af487a505c149f39a3d2b2",
+      "description": "Enemy tank, variant 1: red hull with a single turret eye. Facing up."
+    },
+    {
+      "name": "tank-enemy-shielded-down",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        64,
+        32,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "e271ecc4264ef1a2e866fa4020c94a4ff764d4f0f2bf52899e7187071e292587",
+      "description": "Enemy tank, variant 2: bolted armour plates on every face. Facing down."
+    },
+    {
+      "name": "tank-enemy-shielded-left",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        80,
+        32,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "984a31db5048c361cdf6af6651c0c89d43a0e386b9f24339581f9a829ce746e3",
+      "description": "Enemy tank, variant 2: bolted armour plates on every face. Facing left."
+    },
+    {
+      "name": "tank-enemy-shielded-right",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        96,
+        32,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "7e056a38c16bb918d129bf9b73b3e925a4e4b1814f19bfa8894d12224d1d94b4",
+      "description": "Enemy tank, variant 2: bolted armour plates on every face. Facing right."
+    },
+    {
+      "name": "tank-enemy-shielded-up",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        112,
+        32,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "03a62cc66d6c63dd3416a6743b10384fd10ee740572656726d011762c7381381",
+      "description": "Enemy tank, variant 2: bolted armour plates on every face. Facing up."
+    },
+    {
+      "name": "tank-enemy-unshielded-down",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        0,
+        48,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "e2a153188166e0f6315e3c1956595eb30ab7672a773447cd91897ea3b608f64b",
+      "description": "Enemy tank, variant 3: armour stripped, hull frame exposed. Facing down."
+    },
+    {
+      "name": "tank-enemy-unshielded-left",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        16,
+        48,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "885aa5c9dea515afa3e948b2081c2a16cb65df60da17402a2adde0d2ffb8c1ef",
+      "description": "Enemy tank, variant 3: armour stripped, hull frame exposed. Facing left."
+    },
+    {
+      "name": "tank-enemy-unshielded-right",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        32,
+        48,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "c2d7ad03297921f29093b08b74abdd9fa4fd0ae6e68b91b4abfcef53b15301e2",
+      "description": "Enemy tank, variant 3: armour stripped, hull frame exposed. Facing right."
+    },
+    {
+      "name": "tank-enemy-unshielded-up",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        48,
+        48,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "339e0d3392bb7cfef25f66c11034fff88b5122dde0c97586b60ae75d43b2d986",
+      "description": "Enemy tank, variant 3: armour stripped, hull frame exposed. Facing up."
+    },
+    {
+      "name": "tank-player-down",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        64,
+        48,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "9edcf8eb4db1b0f5de25bea167ff4e2801e92b74b7eefe993c14402039e5d0e2",
+      "description": "Player tank: blue hull with a forward chevron. Facing down."
+    },
+    {
+      "name": "tank-player-left",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        80,
+        48,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "bd42dda07358d521dd1864371d85df054b5e54ad8992cc328cd28ac934c255a4",
+      "description": "Player tank: blue hull with a forward chevron. Facing left."
+    },
+    {
+      "name": "tank-player-right",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        96,
+        48,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "1b9bbeb5852a0323553b443cc5a99049e126fecaec18d220c156a95ebc34cf2c",
+      "description": "Player tank: blue hull with a forward chevron. Facing right."
+    },
+    {
+      "name": "tank-player-up",
+      "group": "tank",
+      "source_id": "starter-set/tanks",
+      "hitbox": "tank",
+      "rect": [
+        112,
+        48,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "833c003e0e0352b0a3f22557927813779eafcb62c06ed7faff92836211100747",
+      "description": "Player tank: blue hull with a forward chevron. Facing up."
+    },
+    {
+      "name": "terrain-brick",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        0,
+        64,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "4c12874b1bc06a1e21644deb13a687dad5c963d1c2da03fa907e3ce9ccc1610a",
+      "description": "Brick wall, tile 2: destroyed by one hit."
+    },
+    {
+      "name": "terrain-brick-cracked",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        16,
+        64,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "b9615a3bb5255c4321b2b45c863b53c6885b23e9f1a1eac171e863b0a02edfd7",
+      "description": "Cracked brick, tile 6: brick already damaged once."
+    },
+    {
+      "name": "terrain-empty",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        32,
+        64,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "c8bfe7af0eb898f0168125f12720133f69a55d3a99f632f4fc0c0f1d7d108f38",
+      "description": "Open ground, tile 0: the only surface tanks and shots share."
+    },
+    {
+      "name": "terrain-forest",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        48,
+        64,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "9df90b31716e3aafbdf87a1b54e5b438532e42a0cea96871088e324ed75fc774",
+      "description": "Forest canopy, tile 7: drawn over tanks, which it conceals."
+    },
+    {
+      "name": "terrain-home-destroyed",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        64,
+        64,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "e7ba84b169a038cd6c88ef9a46bc4e8ea01fc5b08f6bf280e553b9d1725045a3",
+      "description": "Home base, tile 8, after a hostile shot reached it."
+    },
+    {
+      "name": "terrain-home-intact",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        80,
+        64,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "d52e268d292adbe98537b9170caa5636b3009c6ac3bdf97d2ee9c94d1547d7e9",
+      "description": "Home base, tile 8: the thing the run is about."
+    },
+    {
+      "name": "terrain-mirror-ne",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        96,
+        64,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "8e4ea7d9ab542fedbd3f25c87d88edab4c4a9926d4b1cbaf91118533af835b81",
+      "description": "Mirror tile 3: a backslash surface that sends a shot right-to-down."
+    },
+    {
+      "name": "terrain-mirror-se",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        112,
+        64,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "4cbbb974a555e85645b884a1e460c60d75bf7df18eff6d4dc143b6e603daaddd",
+      "description": "Mirror tile 4: a slash surface that sends a shot right-to-up."
+    },
+    {
+      "name": "terrain-stone",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        0,
+        80,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "e3c4392b24a66223dd66c73311b32ba233e8e36e65dd50ea8e2c454b7dce376f",
+      "description": "Stone wall, tile 1: stops shots and is never destroyed."
+    },
+    {
+      "name": "terrain-water-0",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        16,
+        80,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "c7f7f8c6a33f3b951225d14c77004f6f8c1aa6a36c20a39a56bb9de5528285fc",
+      "description": "Water, tile 5, crest phase 0: blocks tanks, passes shots."
+    },
+    {
+      "name": "terrain-water-1",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        32,
+        80,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "72179a12b4fa1b22d716914dacfddeac042001f3dffcc04d71b84d97905efe59",
+      "description": "Water, tile 5, crest phase 1."
+    },
+    {
+      "name": "terrain-water-2",
+      "group": "terrain",
+      "source_id": "starter-set/terrain",
+      "hitbox": "tile",
+      "rect": [
+        48,
+        80,
+        16,
+        16
+      ],
+      "pivot": [
+        0,
+        0
+      ],
+      "sha256_pixels": "6a094042d42be413e67f2ad27c712c489947c12d79160b6f69adde981822aaf1",
+      "description": "Water, tile 5, crest phase 2."
+    }
+  ],
+  "animations": [
+    {
+      "name": "explosion",
+      "frames": [
+        "effect-explosion-0",
+        "effect-explosion-1",
+        "effect-explosion-2",
+        "effect-explosion-3"
+      ],
+      "loop": false
+    },
+    {
+      "name": "shield",
+      "frames": [
+        "effect-shield-0",
+        "effect-shield-1"
+      ],
+      "loop": true
+    },
+    {
+      "name": "spawn",
+      "frames": [
+        "effect-spawn-0",
+        "effect-spawn-1",
+        "effect-spawn-2"
+      ],
+      "loop": false
+    },
+    {
+      "name": "water",
+      "frames": [
+        "terrain-water-0",
+        "terrain-water-1",
+        "terrain-water-2"
+      ],
+      "loop": true
+    }
+  ],
+  "states": {
+    "home.destroyed": "terrain-home-destroyed",
+    "home.intact": "terrain-home-intact",
+    "tile.2.damaged": "terrain-brick-cracked",
+    "tile.2.intact": "terrain-brick"
+  },
+  "readability": {
+    "luma_contrast": [
+      [
+        "tank-player-up",
+        "tank-enemy-normal-up",
+        18
+      ],
+      [
+        "tank-player-left",
+        "tank-enemy-normal-left",
+        18
+      ],
+      [
+        "terrain-forest",
+        "terrain-empty",
+        30
+      ],
+      [
+        "terrain-home-intact",
+        "terrain-home-destroyed",
+        12
+      ],
+      [
+        "terrain-stone",
+        "terrain-brick",
+        12
+      ]
+    ],
+    "silhouette_distinct": [
+      [
+        "tank-enemy-shielded-up",
+        "tank-enemy-unshielded-up",
+        40
+      ],
+      [
+        "powerup-extra-life",
+        "powerup-gatling",
+        40
+      ],
+      [
+        "powerup-extra-life",
+        "powerup-invincibility",
+        40
+      ],
+      [
+        "powerup-gatling",
+        "powerup-invincibility",
+        40
+      ],
+      [
+        "terrain-forest",
+        "terrain-empty",
+        60
+      ],
+      [
+        "effect-explosion-0",
+        "effect-explosion-2",
+        60
+      ],
+      [
+        "effect-spawn-0",
+        "effect-spawn-2",
+        60
+      ]
+    ],
+    "luma_distinct": [
+      [
+        "terrain-mirror-ne",
+        "terrain-mirror-se",
+        120
+      ],
+      [
+        "terrain-water-0",
+        "terrain-water-1",
+        60
+      ],
+      [
+        "terrain-water-1",
+        "terrain-water-2",
+        60
+      ],
+      [
+        "terrain-water-0",
+        "terrain-water-2",
+        60
+      ],
+      [
+        "tank-player-up",
+        "tank-player-down",
+        80
+      ],
+      [
+        "tank-player-left",
+        "tank-player-right",
+        80
+      ],
+      [
+        "shot-up",
+        "shot-down",
+        60
+      ],
+      [
+        "shot-left",
+        "shot-right",
+        60
+      ],
+      [
+        "effect-shield-0",
+        "effect-shield-1",
+        40
+      ]
+    ],
+    "luma_distinct_step": 24,
+    "quadrant_sign": [
+      [
+        "terrain-mirror-ne",
+        -1,
+        10
+      ],
+      [
+        "terrain-mirror-se",
+        1,
+        10
+      ]
+    ]
+  }
+}
