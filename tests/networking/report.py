@@ -16,6 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from battle_city_client.interpolation import SMOOTHING_TICKS
 from battle_city_content import Pack
 from networking_helpers import LinkProfile, TrialResult, run_trial, write_pack
 
@@ -34,19 +35,29 @@ COLUMNS: tuple[str, ...] = (
     "condition",
     "fps",
     "still frames",
-    "max step px",
+    "skipped-tick frames",
     "response ms",
     "batches sent",
     "collapsed",
     "command-less ticks",
+    "still ticks in the run",
 )
 
 
-def rows(pack: Pack) -> list[tuple[str, ...]]:
+def rows(pack: Pack, *, smoothing_ticks: int) -> list[tuple[str, ...]]:
     collected: list[tuple[str, ...]] = []
     for profile in PROFILES:
         for frame_rate in FRAME_RATES:
-            collected.append(_row(run_trial(pack, profile=profile, frame_rate=frame_rate)))
+            collected.append(
+                _row(
+                    run_trial(
+                        pack,
+                        profile=profile,
+                        frame_rate=frame_rate,
+                        smoothing_ticks=smoothing_ticks,
+                    )
+                )
+            )
     return collected
 
 
@@ -56,11 +67,12 @@ def _row(result: TrialResult) -> tuple[str, ...]:
         result.profile.name,
         str(result.frame_rate),
         f"{trace.still_frames}/{trace.frames} ({trace.still_permille / 10:.1f}%)",
-        str(trace.max_step),
+        str(trace.double_steps),
         "-" if result.response_ms is None else str(result.response_ms),
         str(result.batches_sent),
         str(result.collapsed),
         str(result.commandless_ticks),
+        str(result.authoritative_still_ticks),
     )
 
 
@@ -83,7 +95,10 @@ def render(table: list[tuple[str, ...]]) -> str:
 def main() -> int:
     with tempfile.TemporaryDirectory() as directory:
         pack = write_pack(Path(directory))
-        print(render(rows(pack)))
+        print("## Baseline (`smoothing_ticks = 0`)\n")
+        print(render(rows(pack, smoothing_ticks=0)))
+        print(f"\n## Improved (`smoothing_ticks = {SMOOTHING_TICKS}`)\n")
+        print(render(rows(pack, smoothing_ticks=SMOOTHING_TICKS)))
     return 0
 
 

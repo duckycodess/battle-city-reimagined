@@ -35,6 +35,13 @@ delay shifts the whole snapshot stream later without changing its spacing, so it
 rate change the *spacing* at which new snapshots reach a frame, which is what a player
 sees as stutter. :class:`MotionTrace` measures the second; ``response_ms`` on
 :class:`TrialResult` measures the first.
+
+Baseline and improved
+---------------------
+``smoothing_ticks`` is handed straight to the client session and is the *only* thing
+that differs between a baseline trial and an improved one: the same stage, the same
+seed, the same jitter draw, the same frames at the same milliseconds. Zero is the client
+as Phase 7 shipped it, drawing the newest snapshot every frame.
 """
 
 from __future__ import annotations
@@ -48,6 +55,7 @@ from typing import Any, Final
 
 from battle_city_client.intents import PlayerIntent
 from battle_city_client.online import OnlineSession
+from battle_city_client.remote import RemoteBoard, RemotePowerup, RemoteShot, RemoteTank
 from battle_city_content import Pack, load_pack
 from battle_city_protocol import (
     ClientMessage,
@@ -56,6 +64,7 @@ from battle_city_protocol import (
     MatchMode,
     MatchSettings,
     MatchStarting,
+    PlayerSnapshot,
     Rejected,
     RejectionCode,
     ServerMessage,
@@ -68,7 +77,15 @@ from battle_city_server import (
     content_ref_for,
     stage_from_level,
 )
-from battle_city_sim import Direction, Tile, state_hash
+from battle_city_sim import (
+    Direction,
+    Faction,
+    GridPos,
+    TankVariant,
+    Tile,
+    TileGrid,
+    state_hash,
+)
 
 TICK_RATE: Final[int] = 60
 """The session cadence every trial runs at, matching the shipped default."""
@@ -294,6 +311,17 @@ class MotionTrace:
         """Still frames per thousand, so a threshold can be an integer comparison."""
         return 0 if self.frames == 0 else self.still_frames * 1000 // self.frames
 
+    @property
+    def double_steps(self) -> int:
+        """Frames that moved the tank a whole extra tick's worth of pixels.
+
+        A step of two ticks or more is a frame that skipped one: the client had two
+        snapshots to catch up on and showed only the newer. It is the other half of
+        stutter from :attr:`still_frames` and the two always arrive together, because
+        the time a skipped frame did not draw has to be spent somewhere.
+        """
+        return sum(1 for step in self.steps if step >= 2 * TANK_SPEED)
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TrialResult:
@@ -301,6 +329,7 @@ class TrialResult:
 
     profile: LinkProfile
     frame_rate: int
+    smoothing_ticks: int
     trace: MotionTrace
     frames: int
     server_ticks: int
@@ -311,8 +340,36 @@ class TrialResult:
     rejections: tuple[tuple[str, int], ...]
     first_batch_ms: int | None
     first_motion_ms: int | None
+    authoritative_x: tuple[int, ...]
     state_hash: str
     final_tick: int
+
+    @property
+    def authoritative_still_ticks(self) -> int:
+        """Ticks the server itself did not move this tank, once it had set off.
+
+        The floor under any stutter reading. A tick the server ran with no input from
+        this player is a tick the tank really did stand still, and no amount of
+        interpolation can or should hide it: the figure is here so a residual still-frame
+        count can be read against what the authoritative run actually did.
+
+        Measured over the same travel the rendered trace is measured over -- from the
+        tick the tank first moved to the tick it reached the stage edge -- so the wait
+        for the first input to arrive is not counted as the run standing still.
+        """
+        travelled = self.authoritative_x
+        if not travelled:
+            return 0
+        finish = max(travelled)
+        start = next(
+            (index for index, x in enumerate(travelled) if x > travelled[0]),
+            len(travelled),
+        )
+        return sum(
+            1
+            for before, after in zip(travelled[start:], travelled[start + 1 :], strict=False)
+            if before == after and before < finish
+        )
 
     @property
     def rate_limited(self) -> int:
@@ -375,13 +432,18 @@ def run_trial(
     *,
     profile: LinkProfile,
     frame_rate: int,
+    smoothing_ticks: int = 0,
     duration_ms: int = 3000,
     limits: SessionLimits | None = None,
 ) -> TrialResult:
-    """Play one match over ``profile`` and report what the client drew."""
+    """Play one match over ``profile`` and report what the client drew.
+
+    ``smoothing_ticks`` of zero is the baseline client, which draws the newest snapshot
+    on every frame. Anything higher is the interpolated client; nothing else changes.
+    """
     game = GameSession(session_config(pack, limits=limits))
     connection = game.connect()
-    session = _client_for(game, pack)
+    session = _client_for(game, pack, smoothing_ticks=smoothing_ticks)
 
     rng = Random(profile.seed)
     downlink: DelayLine[ServerMessage] = DelayLine(
@@ -404,6 +466,8 @@ def run_trial(
     next_tick = 0
     next_frame = 0
     server_ticks = 0
+    last_frame_ms = 0
+    authoritative_x: list[int] = []
 
     for now_ms in range(duration_ms + 1):
         for outgoing in uplink.take(now_ms):
@@ -415,14 +479,20 @@ def run_trial(
                 downlink.send(now_ms, reply.message)
             next_tick += 1
             server_ticks += 1
+            moved = _authoritative_x(game)
+            if moved is not None:
+                authoritative_x.append(moved)
 
         if now_ms < _instant(next_frame, frame_rate):
             continue
         next_frame += 1
+        elapsed_ms = now_ms - last_frame_ms
+        last_frame_ms = now_ms
 
         for incoming in downlink.take(now_ms):
             inbox.record(incoming)
             session.apply(incoming)
+        session.advance_presentation(elapsed_ms)
 
         batch = session.input_batch(HOLD_RIGHT)
         if batch is not None:
@@ -442,6 +512,7 @@ def run_trial(
     return TrialResult(
         profile=profile,
         frame_rate=frame_rate,
+        smoothing_ticks=smoothing_ticks,
         trace=MotionTrace(tuple(samples)),
         frames=len(samples),
         server_ticks=server_ticks,
@@ -452,12 +523,13 @@ def run_trial(
         rejections=tuple(sorted(inbox.rejections.items())),
         first_batch_ms=first_batch_ms,
         first_motion_ms=first_motion_ms,
+        authoritative_x=tuple(authoritative_x),
         state_hash=state_hash(game.state),
         final_tick=game.state.tick,
     )
 
 
-def _client_for(game: GameSession, pack: Pack) -> OnlineSession:
+def _client_for(game: GameSession, pack: Pack, *, smoothing_ticks: int) -> OnlineSession:
     """A client session that has just been handed its credential by a lobby.
 
     The lobby itself is not run here. What matters to a latency measurement is the
@@ -469,6 +541,7 @@ def _client_for(game: GameSession, pack: Pack) -> OnlineSession:
         display_name="pilot",
         content=content_ref(pack),
         ticket="ticket-latency-000",
+        smoothing_ticks=smoothing_ticks,
     )
     session.apply(
         MatchStarting(
@@ -488,13 +561,78 @@ def _client_for(game: GameSession, pack: Pack) -> OnlineSession:
     return session
 
 
+def _authoritative_x(game: GameSession) -> int | None:
+    """Where the server has this client's tank, read straight off the run."""
+    player = game.state.find_player(SLOT)
+    if player is None or player.tank_id is None:
+        return None
+    tank = game.state.find_tank(player.tank_id)
+    return None if tank is None else tank.position.x
+
+
 def _drawn_x(session: OnlineSession) -> int | None:
     """The horizontal pixel the renderer would blit this client's tank at."""
-    board = session.board
+    board = session.render_board
     if board is None:
         return None
     tank = board.tank_of(SLOT)
     return None if tank is None else tank.x
+
+
+# -- boards, for testing the interpolator on its own --------------------------
+
+
+def board_at(
+    tick: int,
+    *,
+    tanks: tuple[RemoteTank, ...] = (),
+    shots: tuple[RemoteShot, ...] = (),
+    powerups: tuple[RemotePowerup, ...] = (),
+    base_destroyed: bool = False,
+    outcome: int | None = None,
+) -> RemoteBoard:
+    """One authoritative board, built by hand, for interpolator unit tests.
+
+    The grid is the measurement stage's, so the board is the shape a real one is; what
+    these tests vary is which entities are on it and where.
+    """
+    return RemoteBoard(
+        tick=tick,
+        grid=TileGrid.from_rows(tuple(_rows())),
+        tanks=tanks,
+        shots=shots,
+        powerups=powerups,
+        players=(
+            PlayerSnapshot(
+                slot=SLOT,
+                lives=3,
+                tank_id=None,
+                spawn_x=SPAWN_CELL[0],
+                spawn_y=SPAWN_CELL[1],
+            ),
+        ),
+        base_cell=GridPos(*BASE_CELL),
+        base_destroyed=base_destroyed,
+        outcome=outcome,
+        state_hash=f"{tick:064d}",
+    )
+
+
+def tank_at(entity_id: int, x: int, y: int, *, slot: int | None = SLOT) -> RemoteTank:
+    return RemoteTank(
+        entity_id=entity_id,
+        variant=TankVariant.PLAYER,
+        facing=Direction.RIGHT,
+        x=x,
+        y=y,
+        slot=slot,
+        gatling_ticks=0,
+        invincible_ticks=0,
+    )
+
+
+def shot_at(entity_id: int, x: int, y: int) -> RemoteShot:
+    return RemoteShot(entity_id=entity_id, faction=Faction.PLAYER, x=x, y=y)
 
 
 def _instant(index: int, rate: int) -> int:
