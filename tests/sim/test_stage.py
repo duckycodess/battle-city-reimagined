@@ -54,7 +54,7 @@ def test_ragged_grid_is_rejected() -> None:
 
 def test_unknown_tile_code_is_rejected() -> None:
     rows = list(build_rows())
-    rows[3] = "9" + rows[3][1:]
+    rows[3] = "E" + rows[3][1:]
     with pytest.raises(StageValidationError, match=r"grid.rows\[3\]\[0\]"):
         Stage.create(
             stage_id="bad",

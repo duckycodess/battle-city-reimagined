@@ -64,6 +64,18 @@ self-contradictory the rebuild records a choice rather than inheriting an accide
 10. **Initial facing.** Tanks picked a facing with an unseeded ``random.choice``. Players
     now enter facing up.
 
+Opt-in gimmick terrain
+----------------------
+Content schema version 2 adds four conveyor tiles and a teleport pad to the vocabulary;
+see :mod:`battle_city_sim.tiles` for the codes and :mod:`battle_city_sim.gimmicks` for
+the arithmetic. They displace tanks inside the existing movement phase and are ordinary
+traversable ground to everything else: a projectile, a powerup, the score, the wave
+count, the win condition and forest concealment are all untouched. A stage that declares
+none of them steps exactly as it did before, byte for byte, which is what keeps the
+classic layouts and their recorded hashes stable. The canonical state version is
+unchanged: the new tiles are new byte *values* in a field that was already one byte per
+cell, not a new field.
+
 Deliberately not implemented here
 ---------------------------------
 Enemy steering, enemy wave cadence, random powerup spawn and despawn pacing, stage-win
@@ -114,6 +126,13 @@ from .events import (
     TileDamaged,
 )
 from .geometry import DIRECTION_ORDER, Direction, GridPos, Rect, Vec2
+from .gimmicks import (
+    TELEPORT_PAIR_SIZE,
+    centre_cell,
+    conveyor_target,
+    teleport_pads,
+    teleport_target,
+)
 from .inputs import (
     Command,
     DespawnPowerupCommand,
@@ -130,44 +149,51 @@ from .stage import CLASSIC_GRID_SIZE, PlayerSpawn, Stage
 from .state import INITIAL_PLAYER_FACING, SimulationState, new_game
 from .step import BASE_FACTION, StepResult, run_ticks, step
 from .tiles import (
+    CLASSIC_TILES,
+    CONVEYOR_DIRECTIONS,
+    GIMMICK_TILES,
     MIRROR_REFLECTIONS,
     PROJECTILE_TILE_DAMAGE,
+    TILE_BY_CHAR,
+    TILE_CODE_CHARS,
     TILES_BLOCKING_TANKS,
     TILES_PASSING_PROJECTILES,
     Tile,
     TileGrid,
     blocks_tank,
+    conveyor_direction,
+    is_teleport_pad,
     passes_projectile,
+    tile_code_char,
 )
 from .visibility import concealed_tank_ids, is_tank_concealed
 
 __all__ = [
     "BASE_FACTION",
-    "CANONICAL_STATE_VERSION",
-    "CLASSIC_GRID_SIZE",
-    "DEFAULT_RULES",
-    "DIRECTION_ORDER",
-    "ENEMY_VARIANTS",
-    "INITIAL_PLAYER_FACING",
-    "MIRROR_REFLECTIONS",
-    "PROJECTILE_TILE_DAMAGE",
-    "RNG_ALGORITHM",
-    "RNG_VERSION",
-    "TILES_BLOCKING_TANKS",
-    "TILES_PASSING_PROJECTILES",
     "BaseDestroyed",
     "BaseState",
+    "CANONICAL_STATE_VERSION",
+    "CLASSIC_GRID_SIZE",
+    "CLASSIC_TILES",
+    "CONVEYOR_DIRECTIONS",
     "Command",
+    "DEFAULT_RULES",
+    "DIRECTION_ORDER",
     "DespawnPowerupCommand",
     "Direction",
+    "ENEMY_VARIANTS",
     "EnemySpawned",
     "Event",
     "ExtraLifeGranted",
     "Faction",
     "FireCommand",
+    "GIMMICK_TILES",
     "GridPos",
+    "INITIAL_PLAYER_FACING",
     "InvalidInputError",
+    "MIRROR_REFLECTIONS",
     "MoveCommand",
+    "PROJECTILE_TILE_DAMAGE",
     "PlayerLifeLost",
     "PlayerRespawned",
     "PlayerSpawn",
@@ -183,12 +209,14 @@ __all__ = [
     "ProjectileEnded",
     "ProjectileFired",
     "ProjectileReflected",
+    "RNG_ALGORITHM",
+    "RNG_VERSION",
     "Rect",
     "RespawnCommand",
     "Rng",
+    "Rules",
     "RunEnded",
     "RunOutcome",
-    "Rules",
     "ScoreAwarded",
     "ScoreReason",
     "ShieldBroken",
@@ -199,6 +227,11 @@ __all__ = [
     "Stage",
     "StageValidationError",
     "StepResult",
+    "TELEPORT_PAIR_SIZE",
+    "TILES_BLOCKING_TANKS",
+    "TILES_PASSING_PROJECTILES",
+    "TILE_BY_CHAR",
+    "TILE_CODE_CHARS",
     "Tank",
     "TankDestroyed",
     "TankMoveBlocked",
@@ -210,12 +243,19 @@ __all__ = [
     "TileGrid",
     "Vec2",
     "blocks_tank",
+    "centre_cell",
     "concealed_tank_ids",
+    "conveyor_direction",
+    "conveyor_target",
     "encode_state",
     "is_tank_concealed",
+    "is_teleport_pad",
     "new_game",
     "passes_projectile",
     "run_ticks",
     "state_hash",
     "step",
+    "teleport_pads",
+    "teleport_target",
+    "tile_code_char",
 ]

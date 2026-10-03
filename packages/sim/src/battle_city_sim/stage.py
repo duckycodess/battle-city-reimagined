@@ -25,6 +25,7 @@ from typing import Final
 
 from .errors import StageValidationError
 from .geometry import GridPos
+from .gimmicks import TELEPORT_PAIR_SIZE, teleport_pads
 from .tiles import Tile, TileGrid
 
 CLASSIC_GRID_SIZE: Final[int] = 16
@@ -49,6 +50,16 @@ class Stage:
     player_spawns: tuple[PlayerSpawn, ...]
     enemy_spawns: tuple[GridPos, ...]
     base_cell: GridPos
+
+    @property
+    def teleport_pads(self) -> tuple[GridPos, GridPos] | None:
+        """The stage's pad pair in row-major order, or ``None`` when it declares none.
+
+        Derived from the grid rather than stored, because nothing can change it: a pad
+        takes no projectile damage, so the pair a stage starts with is the pair it ends
+        with. See :func:`battle_city_sim.gimmicks.teleport_pads`.
+        """
+        return teleport_pads(self.grid)
 
     @classmethod
     def create(
@@ -87,6 +98,19 @@ class Stage:
         if len(base_cells) != 1:
             raise StageValidationError(
                 f"grid: expected exactly one home base tile, found {len(base_cells)}"
+            )
+
+        pad_cells = grid.positions_of(Tile.TELEPORT_PAD)
+        if pad_cells and len(pad_cells) != TELEPORT_PAIR_SIZE:
+            # Checked here as well as in the content loader, and deliberately not only
+            # there: a stage can be built straight from rows by a test, a tool or a
+            # server that never went through a level file. One pad has nowhere to send a
+            # tank and three have no unambiguous partner, so the grid is refused rather
+            # than quietly playing with its teleports switched off.
+            listed = ", ".join(f"({cell.x}, {cell.y})" for cell in pad_cells)
+            raise StageValidationError(
+                f"grid: expected zero or exactly {TELEPORT_PAIR_SIZE} teleport pads, "
+                f"found {len(pad_cells)} at {listed}"
             )
 
         ordered_players = tuple(sorted(player_spawns))
