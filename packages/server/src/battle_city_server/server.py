@@ -197,6 +197,7 @@ class SessionServer:
             return
         for reply in replies:
             self._deliver(reply)
+        self._sweep_join_deadlines()
         await asyncio.sleep(0)
 
     async def run(self, clock: TickClock, *, ticks: int | None = None) -> None:
@@ -239,8 +240,12 @@ class SessionServer:
 
     async def _read_loop(self, connection: _Connection) -> None:
         limits = self._session.limits
+        held_slot = self._session.slot_of(connection.identifier) is not None
         while not connection.closing:
             joined = self._session.slot_of(connection.identifier) is not None
+            if held_slot and not joined:
+                self._rearm_join(connection)
+            held_slot = joined
             try:
                 message = await self._receive(connection, bounded=not joined)
             except TimeoutError:
@@ -288,6 +293,59 @@ class SessionServer:
         if remaining <= 0.0:
             raise TimeoutError("join deadline passed")
         return await asyncio.wait_for(connection.channel.receive(), remaining)
+
+    def _rearm_join(self, connection: _Connection) -> None:
+        """Give a connection its join budget back when the authority lets go of its slot.
+
+        A slot can go away while the connection stays exactly where it is. The lobby
+        handover is the case that matters: the moment a match starts, membership stops
+        being the seat the lobby granted and becomes the session membership this
+        connection has not proved yet, so :meth:`SessionAuthority.slot_of` returns
+        ``None`` again and the reader is a stranger once more.
+
+        The deadline it was holding was measured from when the socket was accepted, and
+        a lobby that spent longer than the budget deciding — which is every lobby with
+        two people talking in it — has already used all of it. Without this the next
+        read would time out before the client could possibly answer, the host would be
+        closed with ``join_timeout``, and the match it had just started would never be
+        joined by anybody. Re-arming restarts the budget rather than removing it: the
+        wait stays bounded, it is just bounded from the moment the connection became a
+        stranger instead of from a deadline that belonged to a phase that is over.
+        """
+        budget = self._session.limits.join_deadline_seconds
+        connection.join_deadline = asyncio.get_running_loop().time() + budget
+        connection.attempts = 0
+
+    def _sweep_join_deadlines(self) -> None:
+        """Close connections whose join budget ran out while their reader was parked.
+
+        :meth:`_rearm_join` can only bound a reader that comes back to ask for the next
+        message. A connection that was already waiting on one when the handover happened
+        is not asking for anything: it is sitting in a read that will not return until
+        its peer sends a frame, which a client that takes its credential and then goes
+        quiet never will. The deadline it was given would be checked at the top of a
+        read that never starts.
+
+        So the bound is applied from here as well, where there is no read to wait for,
+        and the connection is closed the way an overflowing one is -- from the writer's
+        end, rather than by cancelling a read whose position in the frame nobody knows.
+        That is the same reasoning as :meth:`_overflow`: a reader parked on a message
+        that is never coming is woken by closing the channel underneath it.
+
+        It runs per tick, so it exists only once a match is running, which is exactly
+        when a connection can hold a slot the other players are waiting on. Before the
+        handover an unjoined connection is bounded by its own reader, which is awake.
+        """
+        now = asyncio.get_running_loop().time()
+        for connection in list(self._connections.values()):
+            if connection.closing:
+                continue
+            if self._session.slot_of(connection.identifier) is not None:
+                continue
+            if now < connection.join_deadline:
+                continue
+            self._close_with(connection, RejectionCode.JOIN_TIMEOUT)
+            self._close_later(connection)
 
     def _spent_attempts(self, connection: _Connection, budget: int, *, joined: bool) -> bool:
         """Count one failed approach and say whether the connection is out of them."""

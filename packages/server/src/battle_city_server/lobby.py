@@ -743,11 +743,26 @@ class MatchSession:
         return connection
 
     def disconnect(self, connection: int) -> tuple[Reply, ...]:
+        """Drop a connection from whichever phase is in charge, and only that one.
+
+        Exactly one of the two owns membership at any moment, and a disconnect has to
+        ask the same question. Once the match has started the lobby is over: its seats
+        are the record of who the match began with, and a player that drops is the game
+        session's business, which revokes the slot and lets the run carry on.
+
+        Routing a mid-match drop through the lobby as well is not merely redundant, it
+        is wrong, because the lobby has a rule the match does not share: a host that
+        leaves ends the lobby, since there is no migration and a lobby nobody can
+        configure is worse than an ending. A started match has nothing left to host --
+        the settings are agreed, the stage is loaded and the simulation is running --
+        so applying that rule after the handover would close every other player's
+        session because the host's socket went. Co-op continuity after one player drops
+        is the behaviour this release promises, and this is where it is kept.
+        """
         self._connections.discard(connection)
-        replies = self._lobby.disconnect(connection)
         if self._game is not None:
-            replies += self._game.disconnect(connection)
-        return replies
+            return self._game.disconnect(connection)
+        return self._lobby.disconnect(connection)
 
     def slot_of(self, connection: int) -> int | None:
         if self._game is not None:

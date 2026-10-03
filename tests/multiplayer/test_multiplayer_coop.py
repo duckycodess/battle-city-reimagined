@@ -23,7 +23,7 @@ from battle_city_protocol import (
     SessionClosed,
     StateSnapshot,
 )
-from battle_city_server import MatchSession, SessionServer
+from battle_city_server import MatchSession, SessionLimits, SessionServer
 from battle_city_sim import Direction, state_hash
 from multiplayer_helpers import (
     LEVEL_ID,
@@ -51,12 +51,19 @@ async def seat(server: SessionServer, pack: Pack, slot: int, name: str) -> Clien
 
 
 async def start_coop(
-    server: SessionServer, pack: Pack, slots: tuple[int, ...] = (1, 2)
+    server: SessionServer,
+    pack: Pack,
+    slots: tuple[int, ...] = (1, 2),
+    *,
+    settle: float = 0.0,
 ) -> tuple[list[Client], dict[int, str]]:
     """Seat every slot, agree, start, and join the session the lobby created."""
     clients = [await seat(server, pack, slot, f"p{slot}") for slot in slots]
     for client in clients:
         await client.drain()
+    if settle:
+        # Time spent in the lobby, on purpose. See the deadline test below.
+        await asyncio.sleep(settle)
     revision = 0
     for client, slot in zip(clients, slots, strict=True):
         await client.send(lobby_ready(slot, revision=revision))
@@ -94,6 +101,81 @@ def test_two_clients_reach_one_authoritative_run(tmp_path: Path) -> None:
         assert {tank.player_slot for tank in match.state.tanks} == {1, 2}
         assert match.state.stage_id == LEVEL_ID
         await close_all(server, *clients)
+
+    run(scenario)
+
+
+def test_a_lobby_older_than_the_join_deadline_still_hands_over(tmp_path: Path) -> None:
+    """Deciding slowly must not cost the match the clients were deciding about.
+
+    The join deadline bounds how long a stranger may hold a connection before proving
+    membership, and it is measured from when the socket was accepted. The handover makes
+    every connection a stranger again -- the lobby seat stops counting and the session
+    membership has not been proved yet -- so a lobby that took longer to agree than the
+    deadline allows would hand out credentials nobody could spend: the first read after
+    the handover would time out before the client could answer.
+
+    The deadline here is a fifth of a second and the lobby spends twice that, which is
+    the same shape as a real lobby spending half a minute under the shipped ten. Both
+    clients must still join the match the lobby started.
+    """
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, match = make_server(pack, limits=SessionLimits(join_deadline_seconds=0.2))
+        clients, _ = await start_coop(server, pack, settle=0.4)
+        assert match.game is not None
+        assert match.game.joined_slots() == (1, 2)
+        assert server.connection_count == 2
+
+        # And the budget is a budget, not a removal: the run goes on from here.
+        await server.advance_tick()
+        for client in clients:
+            assert (await client.receive_until(StateSnapshot)).tick == 1
+        await close_all(server, *clients)
+
+    run(scenario)
+
+
+def test_a_connection_that_never_joins_the_started_match_is_still_closed(
+    tmp_path: Path,
+) -> None:
+    """The re-armed deadline is still a deadline.
+
+    A client that takes its credential and then says nothing is holding a slot the match
+    is waiting on. It is given the join budget again from the moment it became a
+    stranger, and closed when that budget is spent -- which is what keeps the re-arm from
+    being an unbounded wait wearing a timer's clothes.
+    """
+
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, match = make_server(pack, limits=SessionLimits(join_deadline_seconds=0.2))
+        clients = [await seat(server, pack, slot, f"p{slot}") for slot in (1, 2)]
+        for client in clients:
+            await client.drain()
+        for client, slot in zip(clients, (1, 2), strict=True):
+            await client.send(lobby_ready(slot, revision=0))
+        for client in clients:
+            await client.drain()
+        await clients[0].send(lobby_start(1))
+        for client in clients:
+            await client.receive_until(MatchStarting)
+
+        # Neither client answers with its JoinRequest. The host's reader comes back for
+        # the next message and is bounded there; the guest's is parked in a read that
+        # will never return, and is bounded by the per-tick sweep instead. Both paths
+        # have to end the same way, which is why both clients are checked here.
+        await asyncio.sleep(0.4)
+        await server.advance_tick()
+        closed = [await client.receive_until(SessionClosed) for client in clients]
+        assert [notice.code for notice in closed] == [RejectionCode.JOIN_TIMEOUT] * 2
+        assert match.game is not None
+        assert match.game.joined_slots() == ()
+        for client in clients:
+            await client.close()
+        await server.close()
 
     run(scenario)
 
@@ -209,6 +291,43 @@ def test_a_disconnect_mid_run_leaves_the_other_client_playing(tmp_path: Path) ->
         assert snapshot.tick == 1
         assert not match.closed
         await close_all(server, one)
+
+    run(scenario)
+
+
+def test_the_host_dropping_mid_match_does_not_end_the_other_players_run(
+    tmp_path: Path,
+) -> None:
+    """The host has no special standing once the match is running.
+
+    A host that leaves ends a *lobby*, because there is no migration and nobody else
+    could configure or start it. A started match has nothing left to host: the settings
+    are agreed, the stage is loaded and the simulation is the server's. So the host
+    dropping is one player dropping, exactly as any other player dropping is, and the
+    guest keeps playing the run it joined.
+    """
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, match = make_server(pack)
+        clients, _ = await start_coop(server, pack)
+        host, guest = clients
+        assert match.game is not None
+        assert match.game.joined_slots() == (1, 2)
+
+        await host.close()
+        await asyncio.sleep(0)
+        assert not match.closed
+        assert match.game.joined_slots() == (2,)
+        assert not any(isinstance(message, SessionClosed) for message in await guest.drain())
+
+        await guest.send(move(2, 1, DirectionCode.LEFT))
+        await asyncio.sleep(0)
+        await server.advance_tick()
+        snapshot = await guest.receive_until(StateSnapshot)
+        assert snapshot.tick == 1
+        assert match.state.tank(2).facing is Direction.LEFT
+        await close_all(server, guest)
 
     run(scenario)
 
