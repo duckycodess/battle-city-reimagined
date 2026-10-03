@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from assets_helpers import (
@@ -294,6 +295,131 @@ def test_a_directory_round_trip_passes(tmp_path: Path) -> None:
     (tmp_path / "atlas.png").write_bytes(encode_png(atlas))
     report = validate_directory(tmp_path, require_catalog=False)
     assert report.ok, report.summary()
+
+
+# --------------------------------------------------------------------------------------
+# The sidecar's readability rules are the catalogue's, not whatever it says they are
+# --------------------------------------------------------------------------------------
+#
+# ``_check_readability`` measures the pixels against the thresholds *the sidecar declares*.
+# That is the right thing for it to do and it is also why it can be defeated by editing
+# the document: a rule that is not there cannot fail, and a threshold the art already
+# clears is not a guard. Only the comparison against the catalogue closes that, so each
+# way of weakening the block gets a test here.
+
+
+def _shipped_with(**readability: Any) -> tuple[AtlasMetadata, Image]:
+    metadata, atlas = shipped_metadata(), shipped_atlas()
+    return replace(metadata, readability=replace(metadata.readability, **readability)), atlas
+
+
+def test_a_sidecar_that_dropped_a_whole_readability_list_is_reported() -> None:
+    """The cheapest way to disable a check: delete the rules and pass by vacuum."""
+    metadata, atlas = _shipped_with(luma_contrast=())
+    report = validate(metadata, atlas)
+    assert problems_mentioning(report, "the sidecar declares no rules here")
+    assert problems_mentioning(report, "readability.luma_contrast")
+
+
+def test_a_sidecar_that_slackened_a_threshold_is_reported() -> None:
+    """A number the art clears by miles is not a regression guard."""
+    original = shipped_metadata().readability.luma_contrast
+    weakened = ((original[0][0], original[0][1], 1), *original[1:])
+    metadata, atlas = _shipped_with(luma_contrast=weakened)
+    report = validate(metadata, atlas)
+    assert problems_mentioning(report, "the catalogue declares [18], the sidecar declares [1]")
+
+
+def test_a_sidecar_that_dropped_one_readability_rule_is_reported() -> None:
+    original = shipped_metadata().readability.luma_distinct
+    metadata, atlas = _shipped_with(luma_distinct=original[1:])
+    report = validate(metadata, atlas)
+    assert problems_mentioning(report, "the sidecar omits it")
+    assert problems_mentioning(report, "terrain-mirror-ne:terrain-mirror-se")
+
+
+def test_a_sidecar_that_invented_a_readability_rule_is_reported() -> None:
+    original = shipped_metadata().readability.silhouette_distinct
+    metadata, atlas = _shipped_with(
+        silhouette_distinct=(*original, ("terrain-empty", "terrain-stone", 1))
+    )
+    report = validate(metadata, atlas)
+    assert problems_mentioning(report, "the catalogue does not")
+
+
+def test_a_sidecar_that_moved_the_luma_step_is_reported() -> None:
+    """The step decides which pixels count, so it moves every grey-scale rule at once."""
+    metadata, atlas = _shipped_with(luma_distinct_step=1)
+    report = validate(metadata, atlas)
+    assert problems_mentioning(report, "readability.luma_distinct_step")
+
+
+def test_a_sidecar_that_flipped_a_mirror_lean_is_reported_against_the_catalogue() -> None:
+    """Not only measured against the pixels: the sign is the deflection table's."""
+    original = shipped_metadata().readability.quadrant_sign
+    flipped = tuple((name, -sign, magnitude) for name, sign, magnitude in original)
+    metadata, atlas = _shipped_with(quadrant_sign=flipped)
+    report = validate(metadata, atlas)
+    assert problems_mentioning(report, "the catalogue declares [-1, 10]")
+
+
+def test_a_sidecar_that_reordered_the_readability_rules_is_reported() -> None:
+    original = shipped_metadata().readability.luma_contrast
+    metadata, atlas = _shipped_with(luma_contrast=tuple(reversed(original)))
+    report = validate(metadata, atlas)
+    assert problems_mentioning(report, "in a different order")
+
+
+def test_a_sidecar_that_repeats_a_readability_rule_is_reported() -> None:
+    original = shipped_metadata().readability.luma_contrast
+    metadata, atlas = _shipped_with(luma_contrast=(*original, original[0]))
+    report = validate(metadata, atlas)
+    assert problems_mentioning(report, "more than once")
+
+
+def test_the_readability_comparison_is_skipped_with_the_catalogue_check() -> None:
+    """``--ignore-catalog`` is one switch, and it turns off one thing: the comparison.
+
+    The measurement against the pixels still runs, so a pack validated this way is still
+    held to its own declared thresholds. What it is not held to is the catalogue's.
+    """
+    metadata, atlas = _shipped_with(luma_contrast=())
+    assert validate(metadata, atlas, require_catalog=False).ok
+
+
+def test_a_weakened_readability_block_is_reported_even_when_the_frame_list_is_wrong() -> None:
+    """The early-return case, which is the one that mattered.
+
+    A hand edit that drops a frame and a hand edit that slackens a threshold arrive
+    together, because they are the same edit: someone made the document agree with
+    whatever is in front of them. A catalogue check that stopped at the frame list would
+    report the first and silently accept the second -- and the second is the one nobody
+    would look for again.
+    """
+    metadata, atlas = shipped_metadata(), shipped_atlas()
+    weakened = replace(metadata.readability, luma_contrast=(), luma_distinct_step=1)
+    broken = replace(
+        metadata,
+        frames=(replace(metadata.frames[0], pivot=(1, 1)), *metadata.frames[2:]),
+        readability=weakened,
+    )
+    report = validate(broken, atlas)
+
+    assert problems_mentioning(report, "the catalogue declares frames the atlas lacks")
+    assert problems_mentioning(report, "the sidecar declares no rules here")
+    assert problems_mentioning(report, "readability.luma_distinct_step")
+    assert problems_mentioning(report, "pivot")
+    assert problems_mentioning(report, "hitboxes") == []
+
+
+def test_a_frame_the_catalogue_does_not_know_does_not_stop_the_other_comparisons() -> None:
+    """An extra frame is reported once, not raised as a lookup failure."""
+    metadata, atlas = shipped_metadata(), shipped_atlas()
+    invented = replace(metadata.frames[0], name="terrain-invented")
+    broken = replace(metadata, frames=(*metadata.frames, invented), hitboxes={"tile": (1, 1)})
+    report = validate(broken, atlas)
+    assert problems_mentioning(report, "the catalogue does not: ['terrain-invented']")
+    assert problems_mentioning(report, "hitboxes.tile")
 
 
 # --------------------------------------------------------------------------------------

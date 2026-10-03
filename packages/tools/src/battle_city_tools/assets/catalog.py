@@ -39,6 +39,12 @@ which is exactly the conversation the number exists to force. And the set of pai
 judgement about which distinctions a player must make, not an exhaustive derivation from
 the specifications; a mechanical check over grey-scale pixels is a floor under the
 property, never a substitute for looking at the art.
+
+One mechanical consequence of all three: the validator does not merely measure the pixels
+against the thresholds the *sidecar* carries, it compares that whole block against the
+values below. Measuring alone could be satisfied by editing the sidecar -- a deleted rule
+cannot fail and a slackened one is not a guard -- so lowering a threshold has to happen
+here, in a file a reviewer reads, and then be re-rendered into the pack.
 """
 
 from __future__ import annotations

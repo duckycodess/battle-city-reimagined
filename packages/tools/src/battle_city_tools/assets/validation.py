@@ -32,6 +32,30 @@ What is checked, and why each one is here:
   where the values come from
 * optionally, that all of the above still agrees with the shipped catalogue, which is what
   catches a sidecar that was hand-edited into agreeing with itself
+
+Two of those deserve spelling out, because the obvious reading of them is wrong.
+
+**The readability rules are checked twice, against two different things.**
+:func:`_check_readability` measures the pixels against *the sidecar's own* thresholds, so
+it can say nothing at all about a sidecar whose ``readability`` block was deleted, slackened
+or quietly reduced to the rules the art happens to pass. Only
+:func:`_check_catalog_readability` can, by comparing the whole
+:class:`~battle_city_tools.assets.metadata.ReadabilityRecord` -- every rule, both frame
+names, the threshold, the sign and the step -- against
+:mod:`~battle_city_tools.assets.catalog`. It therefore runs *first* inside the catalogue
+check, before anything that could stop early, because a dropped rule is exactly the edit
+most likely to arrive alongside a frame list that no longer matches.
+
+**The catalogue check is not exhaustive, and the gap is deliberate rather than hidden.**
+It compares the frame list and its order, the frame size, and every frame's pivot, hitbox,
+group and source identifier; the palette; the hitbox table; and the readability record. It
+does *not* compare the frame descriptions, the animation sequences, the state mapping, the
+source provenance records, the authors and licence prose, the layout constants or the pack
+identity against the catalogue. Those are all structurally validated above -- an animation
+cannot name a frame that is not there, a source must carry authorship -- but a hand edit
+that replaced one *valid* value with another valid one would pass. Closing that gap means
+comparing them here too, and is a change worth making deliberately rather than as a side
+effect of this one.
 """
 
 from __future__ import annotations
@@ -44,7 +68,7 @@ from typing import Final
 from . import catalog as catalog_module
 from .errors import AssetDiagnostic, AssetInvalid
 from .layout import pack
-from .metadata import METADATA_FILENAME, AtlasMetadata, load
+from .metadata import METADATA_FILENAME, AtlasMetadata, ReadabilityRecord, load
 from .palette import PALETTE
 from .png import decode_png
 from .raster import Image
@@ -522,7 +546,96 @@ def _check_readability(
             )
 
 
+_CATALOG_READABILITY: Final[tuple[tuple[str, tuple[tuple[str | int, ...], ...], int], ...]] = (
+    ("luma_contrast", catalog_module.LUMA_CONTRAST, 2),
+    ("silhouette_distinct", catalog_module.SILHOUETTE_DISTINCT, 2),
+    ("luma_distinct", catalog_module.LUMA_DISTINCT, 2),
+    ("quadrant_sign", catalog_module.QUADRANT_SIGN, 1),
+)
+"""Each list of readability rules: its field, the catalogue's value, and its key length.
+
+A rule is frame names followed by numbers, and the names are what identifies it: two for
+a pair rule, one for a lean rule. Splitting there is what lets a comparison say "the
+threshold for this pair changed" instead of "these two lists differ".
+"""
+
+
+def _rule_subject(key: tuple[str | int, ...]) -> str:
+    return ":".join(str(part) for part in key)
+
+
+def _compare_rules(
+    collector: _Collector,
+    field: str,
+    declared: tuple[tuple[str | int, ...], ...],
+    expected: tuple[tuple[str | int, ...], ...],
+    key_length: int,
+) -> None:
+    """Report how ``declared`` differs from the catalogue's ``expected``, rule by rule."""
+    if not declared and expected:
+        collector.fail(
+            field,
+            f"the sidecar declares no rules here; the catalogue declares {len(expected)}. "
+            "A readability list is not optional: deleting one removes the check",
+        )
+        return
+    declared_by_key: dict[tuple[str | int, ...], tuple[str | int, ...]] = {}
+    for rule in declared:
+        key = rule[:key_length]
+        if key in declared_by_key:
+            collector.fail(field, f"the sidecar declares {_rule_subject(key)} more than once")
+            continue
+        declared_by_key[key] = rule[key_length:]
+    expected_by_key = {rule[:key_length]: rule[key_length:] for rule in expected}
+    for key in expected_by_key:
+        if key not in declared_by_key:
+            collector.fail(
+                field,
+                f"the catalogue declares a rule for {_rule_subject(key)}; the sidecar omits it",
+            )
+    for key, values in declared_by_key.items():
+        if key not in expected_by_key:
+            collector.fail(
+                field,
+                f"the sidecar declares a rule for {_rule_subject(key)}; the catalogue does not",
+            )
+        elif values != expected_by_key[key]:
+            collector.fail(
+                field,
+                f"for {_rule_subject(key)} the catalogue declares "
+                f"{list(expected_by_key[key])}, the sidecar declares {list(values)}",
+            )
+    if set(declared_by_key) == set(expected_by_key) and tuple(declared_by_key) != tuple(
+        expected_by_key
+    ):
+        collector.fail(field, "the sidecar lists the catalogue's rules in a different order")
+
+
+def _check_catalog_readability(collector: _Collector, declared: ReadabilityRecord) -> None:
+    """Compare the whole readability record against the catalogue, before anything else.
+
+    :func:`_check_readability` holds the pixels to the thresholds the *sidecar* declares,
+    which means a sidecar that dropped a rule, slackened a threshold or moved the step
+    passes it by construction. This is the check that makes those thresholds the
+    catalogue's rather than the document's own, so it runs first and never early-returns:
+    a weakened rule is most likely to arrive in the same hand edit as everything else.
+    """
+    collector.check("the readability rules are the catalogue's, rule for rule")
+    for attribute, expected, key_length in _CATALOG_READABILITY:
+        rules: tuple[tuple[str | int, ...], ...] = getattr(declared, attribute)
+        _compare_rules(collector, f"readability.{attribute}", rules, expected, key_length)
+    if declared.luma_distinct_step != catalog_module.LUMA_DISTINCT_STEP:
+        collector.fail(
+            "readability.luma_distinct_step",
+            f"the catalogue declares {catalog_module.LUMA_DISTINCT_STEP}, the sidecar "
+            f"declares {declared.luma_distinct_step}; this is how far two luma values "
+            "must differ before a pixel counts, so moving it moves every grey-scale rule",
+        )
+
+
 def _check_catalog(collector: _Collector, metadata: AtlasMetadata) -> None:
+    _check_catalog_readability(collector, metadata.readability)
+
     collector.check("the sidecar still agrees with the shipped catalogue")
     expected = catalog_module.FRAME_NAMES
     if metadata.frame_names != expected:
@@ -534,7 +647,6 @@ def _check_catalog(collector: _Collector, metadata: AtlasMetadata) -> None:
             collector.fail("frames", f"the atlas holds frames the catalogue does not: {extra}")
         if not missing and not extra:
             collector.fail("frames", "the atlas lists the catalogue's frames in a different order")
-        return
     if metadata.frame_size != catalog_module.FRAME_SIZE:
         collector.fail(
             "frame_size",
@@ -542,7 +654,9 @@ def _check_catalog(collector: _Collector, metadata: AtlasMetadata) -> None:
             f"the sidecar declares {list(metadata.frame_size)}",
         )
     for frame in metadata.frames:
-        spec = catalog_module.FRAMES_BY_NAME[frame.name]
+        spec = catalog_module.FRAMES_BY_NAME.get(frame.name)
+        if spec is None:
+            continue  # already reported above as a frame the catalogue does not declare
         field = f"frames.{frame.name}"
         if frame.pivot != spec.pivot:
             collector.fail(

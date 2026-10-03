@@ -50,6 +50,12 @@ re-derives every claim in `atlas.json` from the pixels, and fails if one does no
   a symbolic link leading out of the pack are all refused rather than read, in both
   validator modes. A sidecar decides which bytes get validated, so it may only point at
   bytes the pack is responsible for.
+* **The readability rules are the catalogue's.** The validator measures the pixels against
+  the thresholds in this document *and* compares the whole `readability` block --
+  every rule, both frame names, the threshold, the sign and the step -- against
+  `catalog.py`. Measuring alone would be defeated by editing the document, because a rule
+  that is not here cannot fail. Changing a threshold therefore means changing `catalog.py`
+  and re-running the build, which is the paper trail the numbers exist for.
 
 ## Readability without colour
 
