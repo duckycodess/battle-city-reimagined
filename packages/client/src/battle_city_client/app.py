@@ -26,7 +26,16 @@ Audio is never initialised. ``pygame.init()`` brings up the mixer, which needs a
 device that a container, a CI runner or a headless desktop may not have; the client calls
 :func:`pygame.display.init` on its own and this build plays no sound, so there is nothing
 to lose by not asking. The display subsystem itself honours ``SDL_VIDEODRIVER``, so
-``SDL_VIDEODRIVER=dummy`` runs the whole loop with no window at all.
+``SDL_VIDEODRIVER=dummy`` runs the whole loop with no window at all. The options screen
+has independent effect and music controls and says plainly that they are inactive: the
+preference model is real, the engine is not, and bringing a mixer up to prove it would
+be the one thing that could cost a headless machine its launch.
+
+The joystick subsystem *is* brought up, behind the same kind of guard: a machine without
+one gets a hub with no pads in it and the keyboard client it always had. Pads are
+followed while the game runs -- plugged in, unplugged, and a window that stops being
+told what they are doing -- and in each of the last two cases exactly that device's held
+input is neutralised. See :mod:`battle_city_client.gamepad`.
 """
 
 from __future__ import annotations
@@ -39,10 +48,19 @@ from battle_city_protocol import ContentRef, MessageError
 from battle_city_sim import DEFAULT_RULES, Rules
 
 from . import theme
+from .accessibility import (
+    REPEATABLE_ACTIONS,
+    AccessibilityPreferences,
+    GamepadControl,
+    RepeatTimer,
+    edge_control_action,
+    held_control_action,
+)
 from .assets import AssetLibrary, ProceduralAssetLibrary
 from .display import Presenter, preferred_scale
+from .gamepad import ControlEvent, GamepadHub, close_gamepads, open_gamepads
 from .intents import Action, HeldActions
-from .keymap import edge_action_for, held_action_for
+from .keymap import DEFAULT_BINDINGS, edge_action_for, held_action_for
 from .netlink import NetworkLink, open_tcp_link, parse_endpoint
 from .online import OnlineConfig
 from .persistence import (
@@ -93,6 +111,7 @@ class ClientApp:
         *,
         accumulator: FixedTickAccumulator | None = None,
         frame_cap: int = DEFAULT_FRAME_CAP,
+        gamepads: GamepadHub | None = None,
     ) -> None:
         self.shell = shell
         self.presenter = presenter
@@ -102,6 +121,22 @@ class ClientApp:
         self.held = HeldActions()
         self.clock = pygame.time.Clock()
         self.link: NetworkLink | None = None
+        self.gamepads = gamepads if gamepads is not None else GamepadHub()
+        """Open pads. An app built without any gets an empty hub, not a missing one."""
+
+        self.repeat = RepeatTimer(shell.accessibility.repeat)
+        """Menu-cursor repeat for a held pad direction. Never reaches a run; see below."""
+
+        self._renderers: dict[tuple[theme.ContrastMode, bool], Renderer] = {
+            (shell.accessibility.contrast, shell.accessibility.reduced_motion): renderer
+        }
+        """One renderer per presentation preference, kept so switching back is warm.
+
+        Colour is baked into the asset cache, so a contrast change is a different library
+        and a different renderer rather than a tint. Building them lazily and keeping
+        them means the switch costs one redraw of the stand-in art the first time and
+        nothing after that.
+        """
 
     # -- events ----------------------------------------------------------------
 
@@ -119,16 +154,111 @@ class ClientApp:
             case pygame.KEYDOWN:
                 self._handle_key_down(event.key)
             case pygame.KEYUP:
-                held = held_action_for(event.key)
+                held = held_action_for(event.key, self.shell.accessibility.bindings)
                 if held is not None:
                     self.held.release(held)
+            case pygame.JOYDEVICEADDED:
+                self.gamepads.attach(int(event.device_index))
+            case pygame.JOYDEVICEREMOVED:
+                self._device_lost(int(event.instance_id))
+            case (
+                pygame.JOYBUTTONDOWN
+                | pygame.JOYBUTTONUP
+                | pygame.JOYAXISMOTION
+                | pygame.JOYHATMOTION
+            ):
+                # One reading can carry more than one transition -- a stick thrown
+                # across centre, a hat moved onto a diagonal -- and the hub hands them
+                # over in a fixed order, releases first. Applying all of them is what
+                # stops a direction sticking down after the stick has left it.
+                for control in self.gamepads.handle_event(
+                    event, self.shell.accessibility.dead_zone_percent
+                ):
+                    self._handle_control(control)
             case _:
                 return
+
+    def _device_lost(self, instance: int) -> None:
+        """A pad was unplugged: drop exactly what it was holding, and nothing else.
+
+        SDL delivers no release for a stick that was pushed when the pad was pulled out,
+        so its contribution would stay down for the rest of the run. Clearing the whole
+        held set instead would release a key the player is still holding on the keyboard,
+        which is why :meth:`~battle_city_client.intents.HeldActions.clear_device` exists.
+        The menu repeat goes with it: it was being driven by a direction that is gone.
+        """
+        self.gamepads.detach(instance)
+        self.held.clear_device(instance)
+        self.repeat.clear()
+
+    def _handle_control(self, event: ControlEvent) -> None:
+        """Route one pad control, by the same rules a key is routed by.
+
+        Held state is collected only while the shell is sampling it, repeats are started
+        only where a cursor is, and an armed binding row takes the control instead of
+        acting on it -- each for the reason the keyboard path gives.
+        """
+        bindings = self.shell.accessibility.bindings
+        if self.shell.capturing:
+            if event.pressed:
+                self._capture_control(event.control)
+            return
+        held = held_control_action(event.control, bindings)
+        edge = edge_control_action(event.control, bindings)
+        if not event.pressed:
+            if held is not None:
+                self.held.release(held, event.device)
+            if edge is not None:
+                self.repeat.release(edge)
+            return
+        if held is not None and self.shell.drives_tank:
+            self.held.press(held, event.device)
+        if edge is None:
+            return
+        self._apply_edge(edge)
+        if edge in REPEATABLE_ACTIONS and not self.shell.drives_tank:
+            self.repeat.press(edge)
+
+    def _capture_control(self, control: object) -> None:
+        """Offer one pad control to the armed binding row, or cancel on the pad's back.
+
+        The pad keeps a way out of a capture for the same reason the keyboard does: a
+        player remapping with a pad must be able to abandon a row without reaching for a
+        keyboard they may not be using.
+        """
+        if not isinstance(control, GamepadControl):
+            return
+        if edge_control_action(control) is Action.UI_CANCEL:
+            self.shell.cancel_capture()
+            return
+        self.shell.capture_control(control)
 
     def pump_events(self) -> None:
         """Drain the event queue into the shell."""
         for event in pygame.event.get():
             self.handle_event(event)
+
+    def _apply_edge(self, edge: Action) -> None:
+        """Act on one edge action, whichever device produced it.
+
+        Window scaling is the loop's own and never reaches the shell. Everything else
+        goes to the shell, and the held set is dropped whenever the shell stops sampling
+        it -- the transition out of a run has no release event behind it.
+        """
+        if edge is Action.SCALE_UP:
+            self._step_scale(1)
+            return
+        if edge is Action.SCALE_DOWN:
+            self._step_scale(-1)
+            return
+        before = self.shell.screen
+        self.shell.handle(edge)
+        if not self.shell.drives_tank:
+            self.held.clear()
+        if self.shell.screen is not before:
+            # A direction held through a screen change must not keep stepping a cursor
+            # on the screen that replaced it.
+            self.repeat.clear()
 
     def _handle_key_down(self, key: int) -> None:
         """Route one key press, recording it as held only while a run is being driven.
@@ -142,22 +272,35 @@ class ClientApp:
         the shell stops -- the same reasoning as losing window focus, where input keeps
         happening but nothing is watching it.
         """
+        bindings = self.shell.accessibility.bindings
         screen = self.shell.screen
+        if self.shell.capturing:
+            # An armed binding row takes the keystroke whole: translating it first would
+            # let the key that is about to become *fire* fire on its way in, and would
+            # let the key that is about to become *confirm* leave the screen.
+            #
+            # Two keys are let through, and both are reserved from capture precisely so
+            # they can be: cancel abandons the row, and reset puts every preference and
+            # binding back. They are the way out of a capture, and a way out that only
+            # worked when no row was armed would not be one -- a player who armed a row
+            # with a control they cannot press would otherwise be stuck on the screen
+            # that exists to fix exactly that.
+            armed_edge = edge_action_for(key, screen, bindings)
+            if armed_edge is Action.UI_CANCEL:
+                self.shell.cancel_capture()
+            elif armed_edge is Action.OPTION_RESET:
+                self._apply_edge(armed_edge)
+            else:
+                self.shell.capture_key(key)
+            return
         if self.shell.drives_tank:
-            held = held_action_for(key)
+            held = held_action_for(key, bindings)
             if held is not None:
                 self.held.press(held)
-        edge = edge_action_for(key, screen)
+        edge = edge_action_for(key, screen, bindings)
         if edge is None:
             return
-        if edge is Action.SCALE_UP:
-            self._step_scale(1)
-        elif edge is Action.SCALE_DOWN:
-            self._step_scale(-1)
-        else:
-            self.shell.handle(edge)
-            if not self.shell.drives_tank:
-                self.held.clear()
+        self._apply_edge(edge)
 
     def _step_scale(self, delta: int) -> None:
         """Resize the window, and remember the size the player settled on.
@@ -175,7 +318,21 @@ class ClientApp:
         """Track focus, and forget held keys when the window stops receiving releases."""
         if not focused:
             self._stop_driving()
+            self._release_devices()
         self.shell.set_focused(focused)
+
+    def _release_devices(self) -> None:
+        """Neutralise every device's held input, and forget what each was last reading.
+
+        A window that is not focused is told nothing: no key release, and no stick
+        returning to centre. Both would otherwise survive into the next time the window
+        is looked at, so the held set is dropped, the repeat stops, and each pad's
+        remembered axis and hat positions go with them -- the next reading after focus
+        returns is then judged as new rather than against one taken minutes ago.
+        """
+        self.held.clear()
+        self.repeat.clear()
+        self.gamepads.forget_all_readings()
 
     def _stop_driving(self) -> None:
         """Drop banked wall time and held keys together.
@@ -190,6 +347,44 @@ class ClientApp:
         self.held.clear()
 
     # -- frame -----------------------------------------------------------------
+
+    def pump_repeat(self, elapsed_ms: int) -> tuple[Action, ...]:
+        """Release the menu repeats that fell due, and apply them. Returns what fired.
+
+        Nothing is released while a run is being driven, and the timer is emptied there
+        as well, so a stick held into a stage cannot keep producing cursor actions behind
+        the run. Repeats are cursor actions by construction -- see
+        :data:`~battle_city_client.accessibility.REPEATABLE_ACTIONS` -- so none of them
+        can reach a tick: they are never put into the held set, and the intent a tick is
+        built from reads nothing but the held set.
+        """
+        if self.shell.drives_tank or self.shell.capturing:
+            self.repeat.clear()
+            return ()
+        due = self.repeat.advance(elapsed_ms)
+        for action in due:
+            self._apply_edge(action)
+        return due
+
+    def sync_preferences(self) -> None:
+        """Adopt whatever the options screen changed since the last frame.
+
+        Three things can move: the palette, which is baked into the asset cache and so
+        means a different renderer; the reduced-motion preference, which is carried by
+        the renderer for effects that do not exist yet; and the repeat timings, which the
+        timer reads. Comparing rather than listening keeps the shell free of a callback
+        into the loop, and all three are cheap value comparisons.
+        """
+        preferences = self.shell.accessibility
+        self.repeat.options = preferences.repeat
+        key = (preferences.contrast, preferences.reduced_motion)
+        renderer = self._renderers.get(key)
+        if renderer is None:
+            renderer = self.renderer.with_palette(
+                theme.palette_for(preferences.contrast)
+            ).with_reduced_motion(preferences.reduced_motion)
+            self._renderers[key] = renderer
+        self.renderer = renderer
 
     def advance_frame(self, elapsed_ms: int) -> int:
         """Consume ``elapsed_ms`` of wall time and advance the run. Returns ticks run.
@@ -267,12 +462,14 @@ class ClientApp:
 
     def draw(self) -> None:
         """Render the current shell state and show it."""
+        self.sync_preferences()
         self.renderer.render(self.presenter.surface, self.shell)
         self.presenter.present()
 
     def step(self, elapsed_ms: int) -> None:
-        """One whole frame: events, network, simulation, presentation."""
+        """One whole frame: events, repeats, network, simulation, presentation."""
         self.pump_events()
+        self.pump_repeat(elapsed_ms)
         self.pump_network()
         self.advance_frame(elapsed_ms)
         self.draw()
@@ -287,10 +484,11 @@ class ClientApp:
             self.close()
 
     def close(self) -> None:
-        """Release the network link, if one is open. Idempotent."""
+        """Release the network link and the pads, if either is open. Idempotent."""
         if self.link is not None:
             self.link.close()
             self.link = None
+        close_gamepads(self.gamepads)
 
 
 def build_app(
@@ -302,6 +500,8 @@ def build_app(
     assets: AssetLibrary | None = None,
     online: OnlineConfig | None = None,
     profile: LocalProfile | None = None,
+    accessibility: AccessibilityPreferences | None = None,
+    gamepads: GamepadHub | None = None,
 ) -> ClientApp:
     """Load the bundled stages, open a window and wire the client together.
 
@@ -316,19 +516,39 @@ def build_app(
     disk. :func:`main` is the only caller that attaches a store, because only a real
     launch has a player whose settings and progress are worth keeping; a test, an
     embedding or a headless run gets the same client with its persistence in memory.
+
+    ``accessibility`` defaults to the shipped preferences carrying the real key tables,
+    which is what lets the options screen say what a control is bound to and refuse a
+    key that is already taken. The preferences themselves are not read from anywhere:
+    they last for this launch and are never written. ``gamepads`` defaults to whatever
+    is plugged in, opened through a guard that cannot fail a launch -- a machine with no
+    joystick subsystem gets an empty hub and the keyboard client it always had.
     """
+    preferences = (
+        accessibility
+        if accessibility is not None
+        else AccessibilityPreferences(bindings=DEFAULT_BINDINGS)
+    )
     shell = ClientShell(
         catalog=bundled_stage_catalog(),
         seed=seed,
         rules=rules,
         online_config=online,
         profile=profile if profile is not None else LocalProfile(),
+        accessibility=preferences,
     )
     presenter = Presenter(
         scale=preferred_scale() if scale is None else scale, caption=WINDOW_CAPTION
     )
-    renderer = Renderer(assets or ProceduralAssetLibrary(rules))
-    return ClientApp(shell, presenter, renderer, frame_cap=frame_cap)
+    library = assets or ProceduralAssetLibrary(rules, theme.palette_for(preferences.contrast))
+    renderer = Renderer(library, reduced_motion=preferences.reduced_motion)
+    return ClientApp(
+        shell,
+        presenter,
+        renderer,
+        frame_cap=frame_cap,
+        gamepads=gamepads if gamepads is not None else open_gamepads(),
+    )
 
 
 def parse_args(

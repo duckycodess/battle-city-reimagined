@@ -39,6 +39,9 @@ pygame and drives the real loop, the real renderer and the real simulation.
 | Window scale | `-` and `+`     |
 | Resume the saved stage | `R`, on the stage list |
 | Choose a badge | Up and down, on the controls screen |
+| Change a setting | Left and right, on the options screen |
+| Rebind a control | `Enter` on its row, then the key or pad control |
+| Reset every option and binding | `F5`, on the options screen |
 | Lobby ready  | `R`             |
 | Lobby mode (host)  | `M`       |
 | Lobby stage (host) | `L`       |
@@ -46,9 +49,42 @@ pygame and drives the real loop, the real renderer and the real simulation.
 | Leave a lobby or an online run | `ESC` |
 | Quit         | Close the window, or `QUIT` on the main menu |
 
-Keyboard only in this build. Gamepad support and remapping are accessibility
-requirements; they arrive as further tables feeding the same `Action` vocabulary in
-`keymap.py`, and nothing downstream of that module knows what a device is.
+A gamepad drives the same actions: the left stick or the hat moves, button 0 fires and
+confirms, button 1 goes back, button 7 pauses. Pads are opened behind a guard, followed
+while the game runs, and a pad that is unplugged — or a window that loses focus — has
+exactly its own held input neutralised, never the keyboard's.
+
+## Accessibility
+
+The `OPTIONS` screen is its own screen and its own main-menu entry, below `CONTROLS`.
+It holds contrast, reduced motion, the pad dead zone, menu-cursor repeat timing,
+independent effect and music levels each with its own mute, and a rebindable control for
+every movement, fire, cursor and pause action — keyboard and pad, one row each.
+
+Three things are true of it and are said on the screen itself:
+
+- **The preferences last for this launch and are not saved.** The settings document
+  holds the window scale, the frame cap and the roster name; a fourth field is a schema
+  bump with a migration, which belongs to the issue that owns the save format. The
+  window scale is the exception, because it was already saved — and it is the interface's
+  enlargement control, which works on every screen and keeps every pixel square because
+  the scale is a whole number. Nothing here changes the logical frame or the HUD layout.
+- **The sound controls are inactive.** This build initialises no mixer and ships no
+  sound. The model is real and independent, so the setting is there to be set when audio
+  lands, and the row says what it is.
+- **Reduced motion has nothing yet to hold still.** Every frame is a function of the
+  state it is drawn from: no animation, no flash, no shake, no transition. The
+  preference reaches the renderer so the first effect to arrive has one place to ask.
+
+Going back (`ESC`, pad button 1) and quitting (the window's close button) cannot be
+rebound, and `F5` resets everything — all three work from inside a capture, so the
+remapping screen cannot lock a player out of the game.
+
+None of it reaches the simulation. A binding decides which `Action` an input names;
+repeat can only produce a cursor action, by construction; the dead zone decides whether
+a stick reading counts as held before anything is held; and a tick still carries exactly
+a facing and a fire flag. Contrast is a palette the asset cache is rebuilt from, so it
+changes pixels and nothing else.
 
 ## What it does and does not simulate
 
