@@ -63,11 +63,15 @@ package to show the seam carries a real bot; giving the shipped client one is is
 
 There is also an online path, and it is a different game to the campaign rather than the
 campaign over a wire. A client joins a server-owned lobby, agrees to the settings it is
-shown, and plays a co-op match the server runs: it steps no simulation, keeps no local
-copy, and draws the last snapshot it was sent. The campaign's waves, score and lives are
-the single-player campaign's and are not yet run by a server, so an online match is the
-shared simulation on an agreed stage and nothing more; see ``online.py`` and the
-networking specification.
+shown, and plays a co-op match the server runs: it steps no simulation and keeps no local
+copy. What it draws is the snapshots it was sent, played back a couple of ticks behind
+the newest so that a display faster than the tick rate, or a link whose arrivals wobble,
+does not show the same frame twice -- presentation only, measured in
+``tests/networking/README.md`` and implemented in ``interpolation.py``, with the HUD,
+the state hash and the input stream still reading the newest snapshot directly. The
+campaign's waves, score and lives are the single-player campaign's and are not yet run by
+a server, so an online match is the shared simulation on an agreed stage and nothing
+more; see ``online.py`` and the networking specification.
 
 Failure is still only ever the simulation's: the client reads
 ``SimulationState.outcome`` and never sets one, and the campaign's ``FAILED`` phase is

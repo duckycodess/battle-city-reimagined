@@ -668,6 +668,16 @@ class ClientShell:
         if batch is not None:
             self.outbox.append(batch)
 
+    def advance_presentation(self, elapsed_ms: int) -> None:
+        """Give the online session a frame of wall time to draw with.
+
+        Separate from :meth:`advance`, which runs simulation ticks and is never called
+        online. This advances nothing: it moves the render clock the online session
+        interpolates on, and a local run has none.
+        """
+        if self.online is not None:
+            self.online.advance_presentation(elapsed_ms)
+
     def link_lost(self, detail: str = "") -> None:
         """Record that the transport ended. The session is over for this client."""
         if self.online is not None:

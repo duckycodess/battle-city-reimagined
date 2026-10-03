@@ -390,6 +390,9 @@ class ClientApp:
         if self.shell.consumes_ticks:
             ticks = self.accumulator.advance(elapsed_ms)
             self.shell.advance(ticks, self.held.intent())
+        # An online run consumes no ticks here and still needs the frame's wall time: it
+        # is what the render clock interpolating between authoritative snapshots runs on.
+        self.shell.advance_presentation(elapsed_ms)
         if not self.shell.drives_tank:
             self._stop_driving()
         return ticks

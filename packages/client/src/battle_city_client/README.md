@@ -144,10 +144,29 @@ message only when it *is* the host, and the server refuses it regardless if it i
 
 **An online client runs no simulation.** There is no `step` call anywhere on the online
 path. `online.py` holds the session, `remote.py` reads the authoritative snapshot into
-something the renderer can draw, and `netlink.py` moves frames on a background thread so
-the frame loop never waits on a socket. What is drawn is the last snapshot the server
-sent; the run ends when the server says it ended, and a lost link ends the session
-without inventing an outcome to fill the gap.
+something the renderer can draw, `interpolation.py` decides which moment of the snapshot
+stream a frame shows, and `netlink.py` moves frames on a background thread so the frame
+loop never waits on a socket. The run ends when the server says it ended, and a lost
+link ends the session without inventing an outcome to fill the gap.
+
+**What is drawn is the snapshots the server sent, played back two ticks behind.**
+Phase 8 measured an online match at 0, 50, 100 and 200 ms and found that constant
+latency costs response time and nothing else, while a display faster than the tick rate
+duplicates half its frames and a jittery link skips whole ticks of motion. So the
+playfield is drawn from `OnlineSession.render_board`, which places moving entities on the
+straight line between the two authoritative positions that bracket a render clock running
+`SMOOTHING_TICKS` behind the newest snapshot. It never passes the newest snapshot, never
+invents an entity and never removes one the server still lists, and it costs 33 ms of
+response time. There is **no prediction**: the networking specification reserves
+prediction, rollback and reconciliation for measured need, protocol versioning and
+acceptance tests, and permits interpolation in the same paragraph.
+
+`OnlineSession.board` is untouched by any of that. The HUD, the state hash on screen and
+the input this client offers all read the newest snapshot directly, which is why
+`tests/networking/test_smoothing.py` can run every condition twice and show the server
+recorded the same run, from the same batches, hash for hash. The measurements, the
+conditions they were taken under and what was deliberately not done are in
+`tests/networking/README.md`.
 
 **Competitive modes are selectable and are not playable.** Free-for-all and team battle
 are real, versioned settings, carried with their team assignments in the match settings
