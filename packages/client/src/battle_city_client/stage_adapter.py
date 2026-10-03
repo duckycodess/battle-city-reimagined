@@ -27,11 +27,33 @@ mix, win timing -- is the campaign's.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
+from functools import lru_cache
+from typing import Final
 
 from battle_city_content import ContentError, GridCell, Level, Pack, load_bundled_pack
-from battle_city_protocol import ContentRef
-from battle_city_sim import GridPos, PlayerSpawn, Stage, StageValidationError
+from battle_city_protocol import ContentRef, JsonValue, encode_json_object
+from battle_city_sim import (
+    DEFAULT_RULES,
+    GridPos,
+    PlayerSpawn,
+    Stage,
+    StageValidationError,
+    new_game,
+    state_hash,
+)
+
+IDENTITY_SEED: Final[int] = 0
+"""Seed the identity probe builds its tick-zero state with.
+
+Fixed, because the identity is a statement about the *stage* and must not change with
+the campaign that is playing it. Nothing is drawn from the generator, so the value only
+has to be constant.
+"""
+
+IDENTITY_LENGTH: Final[int] = 64
+"""Characters in a stage identity: a SHA-256 digest, hex, lowercase."""
 
 
 class StageAdapterError(RuntimeError):
@@ -89,6 +111,37 @@ def stage_from_level(level: Level) -> Stage:
         raise StageAdapterError(
             f"{level.level_id} ({level.origin}): {error}",
         ) from error
+
+
+@lru_cache(maxsize=64)
+def stage_identity(entry: StageEntry) -> str:
+    """A digest of everything about ``entry`` that a resumed campaign depends on.
+
+    A saved checkpoint names a level, and a level identifier is not an identity: the same
+    name appears in a different pack, and the same pack is edited in place. Resuming on
+    the name alone would quietly put a player into content their save was never made
+    against -- a different maze, a different base, a different enemy quota -- with the
+    score and the lives they earned somewhere else. This is the value a resume checks.
+
+    It is built from encodings the project already owns rather than from a byte layout
+    invented here. :func:`battle_city_sim.state_hash` over the stage's tick-zero state
+    covers the grid, the base, the player spawn cells and slots, and the stage identifier;
+    the enemy spawn cells and the declared wave counts are not in a simulation state and
+    are added beside it, through the protocol's canonical key-sorted JSON encoder. The
+    result is stable for one stage across processes and machines, and changes if any of
+    those change.
+
+    It is *not* a save format of its own and nothing reads it back: a checkpoint stores
+    the digest and compares it, so a change to what goes in here makes existing
+    checkpoints stale, which is the safe direction. The cache is keyed on the entry value
+    itself, which is why :class:`StageEntry` and everything in it is frozen.
+    """
+    document: dict[str, JsonValue] = {
+        "enemy_spawns": [[cell.x, cell.y] for cell in entry.stage.enemy_spawns],
+        "state": state_hash(new_game(entry.stage, seed=IDENTITY_SEED, rules=DEFAULT_RULES)),
+        "waves": list(entry.waves),
+    }
+    return hashlib.sha256(encode_json_object(document)).hexdigest()
 
 
 def content_ref_for(pack: Pack, level: Level) -> ContentRef:

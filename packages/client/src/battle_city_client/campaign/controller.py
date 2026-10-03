@@ -141,6 +141,53 @@ class CampaignRun:
         )
 
     @classmethod
+    def resumed(
+        cls,
+        plan: tuple[StagePlan, ...],
+        *,
+        stage_index: int,
+        score: int,
+        lives: int,
+        seed: int = DEFAULT_SEED,
+        rules: CampaignRules = DEFAULT_CAMPAIGN_RULES,
+        sim_rules: Rules = DEFAULT_RULES,
+        driver: EnemyCommandDriver | None = None,
+    ) -> CampaignRun:
+        """Open ``plan`` at ``stage_index`` with a score and a life count already in hand.
+
+        This is :meth:`start` with the two stage anchors supplied rather than assumed, and
+        it adds no rule to the campaign. ``score`` and ``lives`` are exactly what
+        :meth:`restarted_stage` rewinds to -- :attr:`stage_start_score` and
+        :attr:`stage_start_lives` -- so a run opened here is indistinguishable from the
+        same stage replayed after a failed attempt. Nothing about scoring, life counts,
+        wave pacing or stage order is decided differently; the campaign is simply told
+        where it already was.
+
+        It exists for one caller: resuming from a saved stage-boundary checkpoint. A
+        campaign chosen from the stage list still goes through :meth:`start`, with the
+        starting lives and a score of zero, because that is the recorded checkpoint rule
+        for choosing a stage and this method does not replace it.
+        """
+        if not plan:
+            raise ValueError("a campaign needs at least one stage")
+        if not 0 <= stage_index < len(plan):
+            raise ValueError(f"stage index {stage_index} is outside the {len(plan)}-stage campaign")
+        if score < 0:
+            raise ValueError(f"a resumed score must not be negative, found {score}")
+        if lives <= 0:
+            raise ValueError(f"a resumed campaign needs at least one life, found {lives}")
+        return cls._begin_stage(
+            plan=plan,
+            rules=rules,
+            sim_rules=sim_rules,
+            seed=seed,
+            driver=IdleEnemyDriver() if driver is None else driver,
+            stage_index=stage_index,
+            score=score,
+            lives=lives,
+        )
+
+    @classmethod
     def _begin_stage(
         cls,
         *,

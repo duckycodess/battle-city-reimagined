@@ -121,8 +121,9 @@ def decode_document(payload: bytes, *, kind: str, current_version: int) -> Docum
 
     Raises :class:`CorruptSave` when the bytes are not such a document, and
     :class:`FutureSchema` when they are one from a later build. The two are separate
-    because the recoveries differ: a corrupt file is replaced once the player saves
-    again, and a newer file must be left exactly as it is.
+    because the recovery guidance differs: a corrupt file may need manual repair from a
+    backup, while a newer file may be readable by a newer build. Neither is overwritten
+    by this build.
     """
     if len(payload) > MAX_DOCUMENT_BYTES:
         raise CorruptSave(

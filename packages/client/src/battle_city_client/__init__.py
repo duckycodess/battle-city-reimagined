@@ -10,7 +10,15 @@ From the repository root::
 client opens on a main menu, offers the three bundled classic stages, and plays the one
 you pick. Arrows or WASD drive, space or ``J`` fires, ``ESC`` or ``P`` pauses, ``-`` and
 ``+`` change the window scale, and the window can be resized freely. There is no audio
-and no gamepad support in this build, and nothing is written to disk.
+and no gamepad support in this build.
+
+Two small files are kept, under ``$BATTLE_CITY_SAVE_DIR`` or the platform's data
+directory: the window scale, frame cap and roster name, and a campaign record holding a
+stage-boundary checkpoint, a progression tally and the chosen cosmetic badge. They are
+written only when something changes, through an atomic replace, and a file that cannot be
+read leaves the client on its defaults with a notice on screen rather than failing a
+launch. Nothing else touches a disk: a shell built without a store, which is every one but
+a real launch's, keeps all of it in memory. See :mod:`battle_city_client.persistence`.
 
 The client never needs a real display to be exercised. With the dummy SDL drivers the
 whole loop runs headless, which is how the tests drive it::
@@ -60,6 +68,7 @@ Layout
 ``timing``         elapsed milliseconds to whole ticks, in exact integers
 ``intents``        device-independent actions and the intent one tick is built from
 ``session``        one run: intent becomes legal simulation commands, nothing more
+``persistence``    versioned local settings and campaign progress, and their recovery
 ``online``         one hosted match from the client's side: lobby, handover, remote run
 ``remote``         a server snapshot read into something the renderer can draw
 ``netlink``        the transport the online session is pumped through (no pygame)
@@ -89,6 +98,15 @@ from .campaign import (
 from .intents import Action, HeldActions, PlayerIntent, intent_from_held
 from .netlink import NetworkLink, TcpLink, open_tcp_link, parse_endpoint
 from .online import LobbyView, OnlineConfig, OnlinePhase, OnlineSession
+from .persistence import (
+    BADGES,
+    Badge,
+    CampaignProgress,
+    LocalProfile,
+    LocalSettings,
+    ProfileStore,
+    StageCheckpoint,
+)
 from .remote import RemoteBoard, RemoteStateError, board_from_snapshot, terrain_from_rows
 from .session import DEFAULT_SEED, StageSession
 from .shell import ClientShell, PauseCause, Screen
@@ -100,6 +118,7 @@ from .stage_adapter import (
     content_ref_for,
     stage_catalog,
     stage_from_level,
+    stage_identity,
 )
 from .timing import NOMINAL_TICK_RATE, FixedTickAccumulator
 
@@ -149,12 +168,15 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "BADGES",
     "DEFAULT_CAMPAIGN_RULES",
     "DEFAULT_SEED",
     "NOMINAL_TICK_RATE",
     "Action",
     "AssetLibrary",
+    "Badge",
     "CampaignPhase",
+    "CampaignProgress",
     "CampaignRules",
     "CampaignRun",
     "ClientApp",
@@ -164,6 +186,8 @@ __all__ = [
     "HeldActions",
     "IdleEnemyDriver",
     "LobbyView",
+    "LocalProfile",
+    "LocalSettings",
     "NetworkLink",
     "OnlineConfig",
     "OnlinePhase",
@@ -172,11 +196,13 @@ __all__ = [
     "PlayerIntent",
     "Presenter",
     "ProceduralAssetLibrary",
+    "ProfileStore",
     "RemoteBoard",
     "RemoteStateError",
     "Renderer",
     "Screen",
     "StageAdapterError",
+    "StageCheckpoint",
     "StageEntry",
     "StagePlan",
     "StageSession",
@@ -195,5 +221,6 @@ __all__ = [
     "present_rect",
     "stage_catalog",
     "stage_from_level",
+    "stage_identity",
     "terrain_from_rows",
 ]

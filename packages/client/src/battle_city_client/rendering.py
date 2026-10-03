@@ -42,6 +42,7 @@ from .shell import (
     OUTCOME_HEADLINES,
     PAUSE_CAUSE_NOTICES,
     PAUSE_LABELS,
+    SAVED_BLOCK_NOTES,
     ClientShell,
     MainMenuItem,
     PauseItem,
@@ -53,6 +54,19 @@ SUBTITLE: str = "REIMAGINED"
 CURSOR: str = ">"
 HUD_PADDING: int = 4
 MARGIN: int = 8
+BADGE_HUD_OFFSET: int = 22
+"""Gap between the base readout and the badge line, clearing the base sprite."""
+
+CONTROLS_PANEL_TOP: int = 34
+CONTROLS_PANEL_PADDING: int = 16
+CONTROLS_KEYS_WIDTH: int = 204
+"""Geometry of the controls-and-options screen, stated once rather than inline.
+
+The two panels are sized from the binding table and the margin, so a row added to
+:data:`~battle_city_client.keymap.CONTROL_HELP` grows both of them together instead of
+spilling out of one.
+"""
+
 STAGE_SELECT_NOTE: tuple[str, ...] = (
     "STARTS THE",
     "CAMPAIGN AT",
@@ -94,7 +108,7 @@ class Renderer:
             case Screen.STAGE_SELECT:
                 self._draw_stage_select(surface, shell)
             case Screen.CONTROLS:
-                self._draw_controls(surface)
+                self._draw_controls(surface, shell)
             case Screen.PLAYING:
                 self._draw_run(surface, shell)
             case Screen.PAUSED:
@@ -192,6 +206,11 @@ class Renderer:
         self._menu(surface, labels, shell.main_index, center_x, 140)
         if shell.notice:
             self.text_centered(surface, shell.notice, center_x, 214, theme.DANGER)
+        recovery = shell.profile.recovery_notice
+        if recovery:
+            # Said once, on the first screen, rather than left for the player to discover
+            # when their progress turns out not to be there.
+            self.text_centered(surface, recovery[:46], center_x, 226, theme.DANGER)
         self.text_centered(surface, "ARROWS OR WASD - ENTER SELECTS", center_x, 240, theme.TEXT_DIM)
 
     def _draw_stage_select(self, surface: pygame.Surface, shell: ClientShell) -> None:
@@ -231,23 +250,119 @@ class Renderer:
         for line in STAGE_SELECT_NOTE:
             self.text(surface, line, (x, y), theme.TEXT_DIM)
             y += line_step()
+        self._draw_saved_stage(surface, shell, x, y + 6)
         self.text(surface, "ENTER PLAY", (x, panel.bottom - 24), theme.TEXT_DIM)
         self.text(surface, "ESC BACK", (x, panel.bottom - 14), theme.TEXT_DIM)
 
-    def _draw_controls(self, surface: pygame.Surface) -> None:
-        center_x = theme.LOGICAL_SIZE[0] // 2
-        self.text_centered(surface, "CONTROLS", center_x, 32, theme.ACCENT, 3)
-        panel = pygame.Rect(
-            44, 76, theme.LOGICAL_SIZE[0] - 88, 24 + len(CONTROL_HELP) * line_step()
-        )
-        self._panel(surface, panel)
-        y = panel.y + 12
-        for label, keys in CONTROL_HELP:
-            self.text(surface, label, (panel.x + 12, y), theme.TEXT_DIM)
-            self.text_right(surface, keys, panel.right - 12, y, theme.TEXT)
+    def _draw_saved_stage(
+        self, surface: pygame.Surface, shell: ClientShell, x: int, y: int
+    ) -> None:
+        """What the profile saved, and the key that picks it up.
+
+        Deliberately beside the list rather than inside it: every row of the list starts
+        its stage fresh, which is the recorded checkpoint rule, and a row that sometimes
+        meant something else would be the one thing a player could not predict. Resuming
+        is a separate key, and this block is what says the key has something to do.
+        """
+        checkpoint = shell.checkpoint
+        index = shell.resume_index
+        self.text(surface, "SAVED", (x, y), theme.ACCENT)
+        y += line_step()
+        blocked = shell.resume_notice
+        if checkpoint is None or index is None:
+            # The short form of the same refusal the key gives, from the one table that
+            # holds both. A save that cannot be used says why rather than going quiet.
+            for line in SAVED_BLOCK_NOTES.get(blocked, ("UNAVAILABLE",)):
+                self.text(surface, line[:12], (x, y), theme.TEXT_DIM)
+                y += line_step()
+            return
+        for line in (
+            f"STAGE {index + 1}",
+            f"SCORE {checkpoint.score}",
+            f"LIVES {checkpoint.lives}",
+        ):
+            self.text(surface, line[:12], (x, y), theme.TEXT)
             y += line_step()
+        self.text(surface, "R RESUMES", (x, y), theme.ACCENT)
+
+    def _draw_controls(self, surface: pygame.Surface, shell: ClientShell) -> None:
+        """Two panels: what the keys do, and what this profile holds.
+
+        The second panel is why this screen is the one that grew rather than a new one:
+        the settings a player can see are the settings they already change with these
+        keys, and a badge is chosen with the same two keys that move every other cursor
+        in the client. A screen of its own would have been a screen with three lines on
+        it and a member in :class:`~battle_city_client.shell.Screen` to reach it.
+        """
+        center_x = theme.LOGICAL_SIZE[0] // 2
+        self.text_centered(surface, "CONTROLS", center_x, 12, theme.ACCENT, 2)
+        height = CONTROLS_PANEL_PADDING + len(CONTROL_HELP) * line_step()
+        keys_panel = pygame.Rect(MARGIN, CONTROLS_PANEL_TOP, CONTROLS_KEYS_WIDTH, height)
+        self._panel(surface, keys_panel)
+        y = keys_panel.y + 8
+        for label, keys in CONTROL_HELP:
+            self.text(surface, label, (keys_panel.x + 8, y), theme.TEXT_DIM)
+            self.text_right(surface, keys, keys_panel.right - 8, y, theme.TEXT)
+            y += line_step()
+
+        options_panel = pygame.Rect(
+            keys_panel.right + MARGIN,
+            CONTROLS_PANEL_TOP,
+            theme.LOGICAL_SIZE[0] - keys_panel.right - 2 * MARGIN,
+            height,
+        )
+        self._draw_options(surface, shell, options_panel)
+
+        self.text_centered(
+            surface, "UP AND DOWN CHOOSE A BADGE", center_x, keys_panel.bottom + 10, theme.TEXT_DIM
+        )
+        recovery = shell.profile.recovery_notice
+        if recovery:
+            self.text_centered(
+                surface, recovery[:46], center_x, keys_panel.bottom + 24, theme.DANGER
+            )
         self.text_centered(surface, "KEYBOARD ONLY IN THIS BUILD", center_x, 232, theme.TEXT_DIM)
         self.text_centered(surface, "ENTER OR ESC RETURNS", center_x, 246, theme.TEXT_DIM)
+
+    def _draw_options(
+        self, surface: pygame.Surface, shell: ClientShell, panel: pygame.Rect
+    ) -> None:
+        """The saved settings, and the badges this profile has earned.
+
+        A locked badge is listed with what it asks for rather than hidden, so the screen
+        says what progression there is instead of growing entries out of nowhere. The
+        cursor marks the selection, as everywhere else in the client, so the choice is
+        never carried by colour alone.
+        """
+        self._panel(surface, panel)
+        profile = shell.profile
+        settings = profile.settings
+        left = panel.x + 6
+        right = panel.right - 6
+        y = panel.y + 8
+        self.text(surface, "OPTIONS", (left, y), theme.ACCENT)
+        y += line_step()
+        for label, value in (
+            ("SCALE", str(settings.scale)),
+            ("FRAME CAP", str(settings.frame_cap)),
+            ("NAME", settings.display_name.upper()[:10]),
+        ):
+            self.text(surface, label, (left, y), theme.TEXT_DIM)
+            self.text_right(surface, value, right, y, theme.TEXT)
+            y += line_step()
+
+        y += 4
+        self.text(surface, "BADGE", (left, y), theme.ACCENT)
+        y += line_step()
+        chosen = profile.badge
+        for badge, unlocked in profile.badge_options():
+            selected = unlocked and badge.badge_id == chosen.badge_id
+            marker = CURSOR if selected else " "
+            color = theme.ACCENT if selected else theme.TEXT_DIM
+            self.text(surface, f"{marker}{badge.label}"[:12], (left, y), color)
+            if not unlocked:
+                self.text_right(surface, badge.requirement[:12], right, y, theme.TEXT_DIM)
+            y += line_step()
 
     # -- the run ---------------------------------------------------------------
 
@@ -256,7 +371,7 @@ class Renderer:
         if session is None:
             return
         self._draw_playfield(surface, session)
-        self._draw_hud(surface, session, shell.campaign)
+        self._draw_hud(surface, session, shell.campaign, shell.profile.badge.label)
 
     def _draw_terrain(
         self, surface: pygame.Surface, grid: TileGrid, *, base_destroyed: bool
@@ -310,8 +425,13 @@ class Renderer:
         )
 
     def _draw_hud(
-        self, surface: pygame.Surface, session: StageSession, campaign: CampaignRun | None
+        self,
+        surface: pygame.Surface,
+        session: StageSession,
+        campaign: CampaignRun | None,
+        badge: str = "",
     ) -> None:
+        """The local HUD. ``badge`` is cosmetic and local: see :meth:`_draw_remote_hud`."""
         state = session.state
         panel = pygame.Rect(*theme.HUD_ORIGIN, *theme.HUD_SIZE)
         self._panel(surface, panel)
@@ -364,6 +484,17 @@ class Renderer:
         y += line_step()
         surface.blit(self.assets.base(destroyed=destroyed), (left, y))
         self._draw_life_pips(surface, left + 20, y + 5, session.player.lives)
+
+        if badge:
+            # The one place a cosmetic is drawn, and it is a local run's own HUD. The
+            # online HUD below has no equivalent and must not grow one: the product
+            # specification's rule is that competitive cosmetics affect neither
+            # simulation state nor visibility, and a badge nobody else can see or be
+            # shown is the shape that rule takes here.
+            y += BADGE_HUD_OFFSET
+            self.text(surface, "BADGE", (left, y), theme.TEXT_DIM)
+            y += line_step()
+            self.text(surface, badge[:12], (left, y), theme.ACCENT)
 
         self.text(surface, "ESC PAUSE", (left, panel.bottom - 14), theme.TEXT_DIM)
 
