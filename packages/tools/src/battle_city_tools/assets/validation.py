@@ -13,6 +13,7 @@ What is checked, and why each one is here:
 
 * the sidecar parses at the version this reader understands, with no missing or unknown key
 * the atlas file's dimensions and pixel digest are the ones recorded
+* ``atlas.path`` names a file inside the pack, which is resolved before it is opened
 * re-running the packer over the declared frame sizes reproduces the declared rectangles,
   which is what makes "deterministic packing" a fact rather than a sentence in a README
 * no two frame rectangles overlap, and no opaque atlas pixel lies outside every rectangle
@@ -37,7 +38,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Final
 
 from . import catalog as catalog_module
@@ -92,6 +93,59 @@ class _Collector:
         )
 
 
+def unowned_atlas_path(declared: str) -> str | None:
+    """Why ``declared`` cannot name a file this pack owns, or ``None`` when it can.
+
+    ``atlas.path`` is read out of a text file and then used to open one, so it decides
+    which bytes the validator reports on. A pack owns the directory its sidecar sits in
+    and nothing else, and this is the first half of holding it to that: a purely textual
+    check that needs no filesystem and gives the same answer on every host.
+
+    Host-independence is the reason a backslash is refused outright. ``..\\secrets.png``
+    is one odd filename on Linux and an escape on Windows, so a sidecar carrying one does
+    not mean the same thing in two checkouts; a path that means two things is not a
+    contract. For the same reason both path flavours are asked whether the name is
+    absolute, rather than only the one this interpreter happens to be running on.
+
+    The second half -- that the name does not leave the directory *through a symlink* --
+    cannot be answered from the text and is :func:`_atlas_file` 's job.
+    """
+    if "\\" in declared:
+        return (
+            "a backslash separates directories on Windows, so this name would not mean "
+            "the same thing in every checkout"
+        )
+    windows, posix = PureWindowsPath(declared), PurePosixPath(declared)
+    if posix.is_absolute() or windows.is_absolute() or windows.drive:
+        return "an absolute path records one machine's layout and can point outside the pack"
+    if ".." in posix.parts:
+        return "a '..' component climbs out of the pack, which owns only its own directory"
+    return None
+
+
+def _atlas_file(directory: Path, declared: str) -> tuple[Path | None, str | None]:
+    """Resolve ``declared`` inside ``directory``, or say why it may not be opened.
+
+    Called before the image is read rather than after, and before the catalogue check is
+    even considered, because ``--ignore-catalog`` asks the validator to skip a comparison
+    against the shipped frame list -- not to open whatever file a sidecar names.
+    """
+    reason = unowned_atlas_path(declared)
+    if reason is not None:
+        return None, reason
+    candidate = directory / declared
+    try:
+        inside = candidate.resolve().is_relative_to(directory.resolve())
+    except OSError as error:  # pragma: no cover - needs an unreadable directory
+        return None, f"the path cannot be resolved: {error}"
+    if not inside:
+        return None, (
+            "the path leads outside the pack directory, which this pack does not own; "
+            "a symbolic link in a pack is still a file the pack does not own"
+        )
+    return candidate, None
+
+
 def validate_directory(directory: Path, *, require_catalog: bool = True) -> ValidationReport:
     """Load ``atlas.json`` and ``atlas.png`` from ``directory`` and check them together."""
     sidecar = directory / METADATA_FILENAME
@@ -106,7 +160,19 @@ def validate_directory(directory: Path, *, require_catalog: bool = True) -> Vali
     except AssetInvalid as error:
         return ValidationReport(artifact=str(sidecar), checks=(), problems=(error.diagnostic,))
 
-    atlas_path = directory / metadata.atlas.path
+    atlas_path, refusal = _atlas_file(directory, metadata.atlas.path)
+    if atlas_path is None:
+        return ValidationReport(
+            artifact=str(sidecar),
+            checks=(),
+            problems=(
+                AssetDiagnostic(
+                    str(sidecar),
+                    "atlas.path",
+                    f"{metadata.atlas.path!r} was not opened: {refusal}",
+                ),
+            ),
+        )
     try:
         atlas = decode_png(atlas_path.read_bytes(), origin=str(atlas_path))
     except FileNotFoundError:
@@ -161,6 +227,12 @@ def _check_atlas(collector: _Collector, metadata: AtlasMetadata, atlas: Image) -
     collector.check("generator and pack identity")
     if not metadata.generator or not metadata.pack_id:
         collector.fail("generator", "the sidecar must name its generator and its pack")
+    collector.check("the atlas path names a file inside the pack")
+    unowned = unowned_atlas_path(metadata.atlas.path)
+    if unowned is not None:
+        collector.fail(
+            "atlas.path", f"{metadata.atlas.path!r} is not a name this pack owns: {unowned}"
+        )
 
 
 def _check_layout(collector: _Collector, metadata: AtlasMetadata) -> None:

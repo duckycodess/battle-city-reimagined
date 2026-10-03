@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from assets_helpers import (
     PACK_DIR,
     problems_mentioning,
@@ -293,3 +294,107 @@ def test_a_directory_round_trip_passes(tmp_path: Path) -> None:
     (tmp_path / "atlas.png").write_bytes(encode_png(atlas))
     report = validate_directory(tmp_path, require_catalog=False)
     assert report.ok, report.summary()
+
+
+# --------------------------------------------------------------------------------------
+# A pack owns its own directory and nothing else
+# --------------------------------------------------------------------------------------
+#
+# ``atlas.path`` comes out of a text file and decides which bytes get opened. Every case
+# below writes a *valid* atlas somewhere the pack does not own, so a validator that read
+# the file first would report a clean pack; the only correct answer is a refusal that
+# names the path and opens nothing.
+
+
+def _pack_pointing_at(directory: Path, declared: str) -> Image:
+    """Write a sidecar in ``directory`` naming ``declared``, and the real atlas elsewhere."""
+    metadata, atlas, _ = synthetic_pack()
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "atlas.json").write_bytes(
+        serialize(replace(metadata, atlas=replace(metadata.atlas, path=declared)))
+    )
+    return atlas
+
+
+@pytest.mark.parametrize("require_catalog", [True, False])
+@pytest.mark.parametrize(
+    ("declared", "because"),
+    [
+        ("/etc/hostname", "an absolute path"),
+        ("../outside/atlas.png", "a '..' component"),
+        ("..\\outside\\atlas.png", "a backslash"),
+        ("sub\\atlas.png", "a backslash"),
+        ("C:\\windows\\atlas.png", "a backslash"),
+        ("C:atlas.png", "an absolute path"),
+        ("//server/share/atlas.png", "an absolute path"),
+    ],
+)
+def test_an_atlas_path_outside_the_pack_is_refused(
+    tmp_path: Path, declared: str, because: str, require_catalog: bool
+) -> None:
+    pack = tmp_path / "pack"
+    atlas = _pack_pointing_at(pack, declared)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "atlas.png").write_bytes(encode_png(atlas))
+
+    report = validate_directory(pack, require_catalog=require_catalog)
+    assert not report.ok
+    assert problems_mentioning(report, "atlas.path")
+    assert problems_mentioning(report, because)
+    assert report.checks == (), "the refusal must come before anything is read"
+
+
+def test_a_symlink_leading_out_of_the_pack_is_refused(tmp_path: Path) -> None:
+    """The case the textual check cannot see: an ordinary relative name that is a door.
+
+    ``atlas.png`` here is a name a reviewer would not look at twice, and the file it
+    opens is in another directory. Resolving before reading is the only thing that
+    notices, which is why the check is not purely textual.
+    """
+    pack = tmp_path / "pack"
+    atlas = _pack_pointing_at(pack, "atlas.png")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real = outside / "atlas.png"
+    real.write_bytes(encode_png(atlas))
+    try:
+        (pack / "atlas.png").symlink_to(real)
+    except OSError:  # pragma: no cover - a filesystem without symlinks
+        pytest.skip("this filesystem does not support symbolic links")
+
+    report = validate_directory(pack, require_catalog=False)
+    assert problems_mentioning(report, "the pack does not own")
+    assert report.checks == ()
+
+
+def test_a_relative_path_inside_the_pack_is_allowed(tmp_path: Path) -> None:
+    """Ownership, not a hard-coded filename: a subdirectory of the pack is still the pack."""
+    pack = tmp_path / "pack"
+    atlas = _pack_pointing_at(pack, "sheets/atlas.png")
+    (pack / "sheets").mkdir()
+    (pack / "sheets" / "atlas.png").write_bytes(encode_png(atlas))
+
+    report = validate_directory(pack, require_catalog=False)
+    assert report.ok, report.summary()
+
+
+def test_a_symlink_inside_the_pack_is_still_read(tmp_path: Path) -> None:
+    """The negative control: the rule is about leaving the pack, not about symlinks."""
+    pack = tmp_path / "pack"
+    atlas = _pack_pointing_at(pack, "atlas.png")
+    (pack / "real.png").write_bytes(encode_png(atlas))
+    try:
+        (pack / "atlas.png").symlink_to(pack / "real.png")
+    except OSError:  # pragma: no cover - a filesystem without symlinks
+        pytest.skip("this filesystem does not support symbolic links")
+
+    assert validate_directory(pack, require_catalog=False).ok
+
+
+def test_an_unowned_atlas_path_is_reported_by_the_in_memory_validator_too(tmp_path: Path) -> None:
+    """``validate`` never opens a file, so it reports the claim rather than refusing a read."""
+    metadata, atlas, _ = synthetic_pack()
+    broken = replace(metadata, atlas=replace(metadata.atlas, path="/etc/hostname"))
+    report = validate(broken, atlas, artifact="fixture.json", require_catalog=False)
+    assert problems_mentioning(report, "is not a name this pack owns")

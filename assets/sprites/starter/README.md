@@ -45,6 +45,11 @@ re-derives every claim in `atlas.json` from the pixels, and fails if one does no
   pixels may compress differently on another zlib build. The sidecar does not hash itself.
 * **Every opaque pixel is a declared palette colour**, and the palette is the client's
   `theme` palette plus the mid tones a lit render needs.
+* **`atlas` names a file this pack owns.** `atlas.path` is resolved inside this directory
+  before anything is opened: an absolute path, a `..` component, a Windows-style name and
+  a symbolic link leading out of the pack are all refused rather than read, in both
+  validator modes. A sidecar decides which bytes get validated, so it may only point at
+  bytes the pack is responsible for.
 
 ## Readability without colour
 
