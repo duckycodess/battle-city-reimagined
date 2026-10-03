@@ -11,7 +11,13 @@ uv run --locked python tests/multiplayer/screenshot_tool.py
 | `01-lobby-waiting.png` | Lobby after two clients took their seats; nobody ready yet |
 | `02-lobby-competitive-blocked.png` | Team battle selected: teams shown, start refused |
 | `03-lobby-ready.png` | Co-op, both members agreed to the revision, server says startable |
-| `04-coop-play.png` | The co-op run after 24 authoritative ticks |
+| `04-coop-play-host.png` | The co-op run after 24 authoritative ticks, slot 1's window |
+| `05-coop-play-guest.png` | The same tick of the same match, slot 2's window |
+
+`04` and `05` are the two-client acceptance: two windows, one match. They are rendered
+from two separate `ClientShell` instances on two separate connections at the same
+authoritative tick, so the two tanks, the terrain and the state hash agree because the
+server said so and not because one frame was reused.
 
 ## How they were taken
 

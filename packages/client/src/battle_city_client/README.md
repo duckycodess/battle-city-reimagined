@@ -113,6 +113,18 @@ competitive result are simulation rules that belong to an accepted gameplay prop
 The lobby refuses with `mode_unsupported` rather than running a co-op match and calling
 it a duel.
 
+**An online match is not the campaign.** The campaign above — the enemy quota, the
+600-tick spawn cadence, the score, the lives carried between stages, stage clear and
+campaign completion — is `battle_city_client.campaign`, and it runs in this process for a
+local run only. A server runs the shared simulation on the stage the lobby agreed to and
+nothing else: no waves are released, no score is kept, and the lives in the HUD are the
+simulation's per-slot count rather than a campaign's. The networking specification makes
+the server authoritative for score, lives and wave spawning, so those belong on the server
+before an online run can have them; putting the client's campaign in charge of a match it
+does not own would be exactly the client-side authority the specification forbids. Until
+that lands, an online co-op match is two players on one agreed stage, and the lobby does
+not claim otherwise.
+
 Reconnect, host migration and a lobby browser are not here. A dropped connection is a
 dropped player, a host that leaves ends its lobby, and a lost server is a lost session,
 as the networking specification's first release allows.

@@ -15,7 +15,9 @@ from pathlib import Path
 
 from battle_city_client.intents import IDLE_INTENT, Action, PlayerIntent
 from battle_city_client.online import OnlineConfig, OnlinePhase, OnlineSession
+from battle_city_client.session import StageSession
 from battle_city_client.shell import ClientShell, Screen
+from battle_city_client.stage_adapter import stage_from_level
 from battle_city_content import Pack
 from battle_city_protocol import (
     ClientChannel,
@@ -33,6 +35,7 @@ from multiplayer_helpers import (
     SESSION_ID,
     TICKETS,
     content_ref,
+    level_of,
     make_server,
     write_pack,
 )
@@ -105,6 +108,11 @@ async def attach(server: SessionServer, shell: ClientShell) -> Peer:
     peer = Peer(shell, client_channel(client_end), task)
     await peer.pump()
     return peer
+
+
+def local_session(pack: Pack) -> StageSession:
+    """A plain offline run on the same stage, built through the client's own adapter."""
+    return StageSession.start(stage_from_level(level_of(pack)))
 
 
 async def coop_peers(server: SessionServer, pack: Pack) -> tuple[Peer, Peer]:
@@ -461,6 +469,44 @@ def test_leaving_the_lobby_returns_to_the_menu_and_drops_the_session(
         assert guest.shell.screen is Screen.MAIN_MENU
         assert guest.shell.online is None
         assert not guest.shell.wants_link
+
+        await host.pump(rounds=2)
+        lobby = host.online.lobby
+        assert lobby is not None
+        assert [member.slot for member in lobby.members] == [1]
+        assert match.lobby.occupied_slots() == (1,)
+        await server.close()
+        await host.close()
+        await guest.close()
+
+    run(scenario)
+
+
+def test_starting_a_local_run_gives_up_the_online_seat(tmp_path: Path) -> None:
+    """A local campaign and an online match are never both running in one shell.
+
+    One board, one intent stream, one screen. If opening a local run left the online
+    session in place, the shell would keep a seat it had stopped playing and would go on
+    offering input for a match nobody was watching, so the seat is given up the same way
+    leaving the lobby gives it up -- with the departure the roster can explain.
+    """
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, match = make_server(pack)
+        host = await attach(server, make_peer_shell(pack, TICKETS[1], "host"))
+        guest = await attach(server, make_peer_shell(pack, TICKETS[2], "guest"))
+        await guest.pump()
+        # Read through a local: asserting on the attribute itself narrows it for the
+        # rest of the test, and the next assertion is that it changed.
+        seated = guest.shell.online
+        assert seated is not None and seated.seated
+
+        guest.shell.open_session(local_session(pack))
+        assert guest.shell.online is None
+        assert guest.shell.screen is Screen.PLAYING
+        assert guest.shell.campaign is None
+        await guest.pump()
 
         await host.pump(rounds=2)
         lobby = host.online.lobby
