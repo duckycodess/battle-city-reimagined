@@ -67,6 +67,18 @@ PAUSE_EDGE_BINDINGS: Final[Mapping[int, Action]] = {
 }
 """The pause menu, where ``ESCAPE`` resumes instead of abandoning the run."""
 
+STAGE_SELECT_EDGE_BINDINGS: Final[Mapping[int, Action]] = {
+    **MENU_EDGE_BINDINGS,
+    pygame.K_r: Action.RESUME_SAVE,
+}
+"""The stage list, where one key picks the saved stage up again.
+
+Resuming is a key of its own rather than a menu entry because the list is the pack and
+every row in it has to keep meaning "start this stage". ``R`` is free on this screen --
+it is a lobby key, and there is no lobby here -- and it is the same letter the lobby uses
+for an action the player asks for rather than navigates to.
+"""
+
 LOBBY_EDGE_BINDINGS: Final[Mapping[int, Action]] = {
     **MENU_EDGE_BINDINGS,
     pygame.K_r: Action.ONLINE_READY,
@@ -94,6 +106,8 @@ CONTROL_HELP: Final[tuple[tuple[str, str], ...]] = (
     ("PAUSE", "ESC / P"),
     ("SELECT", "ENTER"),
     ("BACK", "ESC"),
+    ("RESUME SAVE", "R"),
+    ("CHOOSE BADGE", "UP / DOWN"),
     ("WINDOW SCALE", "- / +"),
     ("LOBBY READY", "R"),
     ("LOBBY MODE", "M"),
@@ -108,6 +122,8 @@ def edge_bindings_for(screen: Screen) -> Mapping[int, Action]:
     match screen:
         case Screen.PLAYING | Screen.ONLINE_PLAY:
             return PLAY_EDGE_BINDINGS
+        case Screen.STAGE_SELECT:
+            return STAGE_SELECT_EDGE_BINDINGS
         case Screen.PAUSED:
             return PAUSE_EDGE_BINDINGS
         case Screen.ONLINE_LOBBY:

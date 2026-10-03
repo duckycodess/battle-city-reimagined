@@ -11,7 +11,8 @@ From the repository root:
 uv run --locked --package battle-city-client python -m battle_city_client
 ```
 
-Options: `--seed`, `--scale` (1-8), `--frame-cap`. `--help` lists them. To reach a
+Options: `--seed`, `--scale` (1-8), `--frame-cap`. `--help` lists them, and prints the
+values a saved profile supplies. `BATTLE_CITY_SAVE_DIR` moves the profile somewhere else. To reach a
 lobby, add `--server HOST:PORT --session ID --ticket TICKET`, optionally `--name` and
 `--content PACK@VERSION/LEVEL#SCHEMA`. The three online options are required together;
 without them the `ONLINE` menu entry says what is missing rather than disappearing.
@@ -36,6 +37,8 @@ pygame and drives the real loop, the real renderer and the real simulation.
 | Menu select  | `Enter`         |
 | Menu back    | `ESC`           |
 | Window scale | `-` and `+`     |
+| Resume the saved stage | `R`, on the stage list |
+| Choose a badge | Up and down, on the controls screen |
 | Lobby ready  | `R`             |
 | Lobby mode (host)  | `M`       |
 | Lobby stage (host) | `L`       |
@@ -81,9 +84,16 @@ only reads one.
 ## Campaign and free play
 
 There is one mode. Choosing a stage starts the campaign *at that stage*, with the
-starting lives and a score of zero: there is no saved progress, so the stage list is also
-the checkpoint. Pausing offers `RESTART STAGE`, which replays the stage from the score and
-lives it began with. The screen shown when a run stops — a stage cleared, the campaign
+starting lives and a score of zero. That is the recorded checkpoint rule and it is
+unchanged by saving: every stage in the pack is selectable and every one of them starts
+fresh. Pausing offers `RESTART STAGE`, which replays the stage from the score and lives it
+began with.
+
+What saving adds is one more way in, asked for explicitly: `R` on the stage list resumes
+the saved stage, with the score and the lives *that stage* opened on. Those are the same
+two anchors `RESTART STAGE` rewinds to, so a resumed stage is indistinguishable from a
+replayed one and no rule about score, lives or pacing is decided differently because a
+save exists. The screen shown when a run stops — a stage cleared, the campaign
 completed, or a loss — is one overlay whose wording and menu come from the campaign phase.
 Giving a stage clear and a campaign completion their own `Screen` members is issue #36;
 `tests/client` asserts the current member list and is outside the campaign issue's files.
@@ -141,9 +151,81 @@ the body the simulation collides with.
 
 ## Persistence
 
-None. This build reads the bundled content pack and writes nothing: no settings file, no
-save, no log. Versioned settings and saves with atomic replacement are a persistence-phase
-deliverable.
+Two small JSON files, written only when something changes. `battle_city_client.persistence`
+holds all of it; its module docstring is the reference and this is the summary.
+
+```
+settings.json   window scale, frame cap, roster name
+campaign.json   stage checkpoint, progression tally, chosen badge
+```
+
+Each file is one self-describing envelope — `format`, `kind`, `schema_version`, `data` —
+decoded through the protocol's hardened JSON reader, bounded before it is parsed, and
+rejected rather than half-applied if it carries a field this build does not know.
+
+They live in `$BATTLE_CITY_SAVE_DIR` if that is set, otherwise
+`$XDG_DATA_HOME/battle-city-reimagined`, `%APPDATA%\battle-city-reimagined` or
+`~/.local/share/battle-city-reimagined`. The path is resolved on first use and the
+directory is created by the first write, so a launch that changes nothing creates nothing.
+
+Writes are atomic: a uniquely named, exclusively created temporary file, flushed and
+`fsync`-ed, moved onto the target with `os.replace`, then a `fsync` of the directory. A
+reader sees the whole old file or the whole new one, two writers never stage into the same
+file, and a failed write removes only its own temporary. Reads are bounded before anything
+is parsed — at most one byte past the size limit leaves the disk — so an oversized file is
+refused without being loaded.
+
+**A save file never stops a launch.** A file that cannot be read leaves the client on its
+defaults, says so once on the main menu and the controls screen, and is then left exactly
+as it is for the rest of the session — a corrupt file because it is the only copy of
+whatever it was, and a file from a newer build because it is not damaged at all. An older
+file is migrated, and the original is copied to `<name>.v<version>.bak` *before* the
+upgraded document replaces it; if that backup cannot be written the upgrade is abandoned
+rather than performed without a way back. An existing backup is never written over —
+later ones take `.bak.2` through `.bak.9`, each created exclusively, and when every
+ordinal is taken the upgrade is refused instead. Recovery does not repair a file, does not
+clear old backups, and cannot tell a deleted save from a first launch.
+
+**No secret is ever written.** The settings record has three fields and the server
+address, the session identifier and the lobby ticket are not among them; they are launch
+options and they stay on the command line.
+
+**A checkpoint is a stage boundary, not a saved game.** It holds the level identifier, its
+position, the score and lives that stage opened on — the anchors the campaign already
+keeps for restarting a stage — the campaign seed, and a digest of the stage's content.
+There is no tick, no tank, no terrain damage and no generator position in a save: a
+mid-stage save would be a second source of truth for simulation state, and the canonical
+encoding that would have to version it is reserved to an accepted proposal.
+
+**A resume is the same campaign, not a similar one.** Every random stream a stage draws
+from is derived from the campaign seed, so resuming uses the seed the run was started
+with rather than whatever `--seed` this launch was given. And a level identifier names a
+stage without identifying one — the same name lives in another pack, and a pack is edited
+in place — so the checkpoint carries `stage_identity`, a digest over the stage's tick-zero
+state plus its enemy spawns and declared waves. A save whose level is missing, or whose
+stage data has moved under it, is refused with a reason on the stage list and **kept**:
+putting the pack back makes it usable again.
+
+**Nothing here is on by default outside a real launch.** `ClientShell` and `build_app`
+keep settings and progress in memory with no file behind them; only `main` attaches a
+store. Every test in the repository, and every embedding of the shell, is as free of I/O
+as it was before.
+
+## Cosmetics
+
+Three badges — `RECRUIT`, `VETERAN` after a stage is cleared, `ACE` after a campaign is
+completed — chosen with up and down on the controls screen. Unlocks are *derived* from the
+progression tally every time they are read and are never stored, so a hand-edited file can
+name a badge but cannot grant one: a selection the tally does not support falls back to
+the default.
+
+A badge is a word on the local HUD of the machine that earned it and nothing else. It
+reaches no simulation state, no protocol message and no online screen, which is what the
+product specification's rule — cosmetics must not alter competitive balance, and
+competitive cosmetics must not affect simulation state or visibility — amounts to here.
+`tests/persistence` asserts it in all three directions: two profiles with different badges
+produce equal per-tick state hashes, byte-identical per-tick `encode_state` output, and
+byte-identical outgoing messages across a whole online session.
 
 ## Importing the package does not import pygame
 
@@ -162,6 +244,9 @@ in one interpreter — from loading a display library on the simulation's behalf
 
 `tests/client/screenshots/` holds one PNG per offline screen plus a generated
 `README.md` recording the driver, scale, versions and seed that produced them.
+`tests/persistence/screenshots/` holds the screens persistence added — the options and
+badge panel, the stage list beside a saved stage, a HUD with a badge on it, and the main
+menu after a save file that could not be read.
 `tests/multiplayer/screenshots/` holds the online ones — the lobby, a blocked
 competitive configuration and a live co-op run — rendered against a real server by
 `tests/multiplayer/screenshot_tool.py`, which pytest does not collect. Ordinary test runs
@@ -171,6 +256,7 @@ visual change:
 
 ```sh
 BATTLE_CITY_REFRESH_CAPTURES=1   uv run --locked pytest tests/client/test_client_screenshots.py
+BATTLE_CITY_REFRESH_CAPTURES=1   uv run --locked pytest tests/persistence/test_persistence_screenshots.py
 ```
 
 ## Known limitation: the simulation's import-purity check

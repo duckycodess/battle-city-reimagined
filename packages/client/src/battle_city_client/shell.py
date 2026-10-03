@@ -22,12 +22,19 @@ Two behaviours are choices rather than consequences, and are recorded as such:
 
 Campaign and free play
 ----------------------
-Choosing a stage starts the campaign *at that stage*. There is only one mode: the product
-specification asks that a mode supply rules and content to the shared simulation rather
-than fork it, and with no saved progress the stage list is also the whole checkpoint
-story. A run that reaches a stage clear, a campaign completion or a failure shows the
-interstitial on :attr:`Screen.RUN_OVER`, whose wording and menu come from the campaign
-phase.
+Choosing a stage starts the campaign *at that stage*, with the starting lives and a score
+of zero. There is only one mode: the product specification asks that a mode supply rules
+and content to the shared simulation rather than fork it. A run that reaches a stage
+clear, a campaign completion or a failure shows the interstitial on
+:attr:`Screen.RUN_OVER`, whose wording and menu come from the campaign phase.
+
+The shell also keeps a :class:`~battle_city_client.persistence.LocalProfile`, and records
+a stage-boundary checkpoint into it whenever a stage opens. That is additive in both
+directions: the stage list stays unrestricted and still starts every stage fresh, and
+resuming the saved stage is a separate action a player asks for on the stage list. The
+checkpoint carries only what the campaign already holds as its stage anchors -- the score
+and the lives that stage opened on -- so nothing about scoring, lives or pacing is decided
+differently because a save exists. The default profile has no file behind it.
 
 The shell still supports a campaign-less session, because :meth:`open_session` takes one
 directly and the presentation tests drive terminal screens that way. When a campaign is
@@ -67,8 +74,9 @@ from .campaign import (
 )
 from .intents import IDLE_INTENT, Action, PlayerIntent
 from .online import OnlineConfig, OnlinePhase, OnlineSession
+from .persistence import LocalProfile, StageCheckpoint
 from .session import DEFAULT_SEED, StageSession
-from .stage_adapter import StageEntry
+from .stage_adapter import StageEntry, stage_identity
 
 
 class Screen(Enum):
@@ -165,6 +173,39 @@ retrying it is all there is.
 
 EMPTY_CATALOG_NOTICE: Final[str] = "NO STAGES AVAILABLE"
 
+NO_CHECKPOINT_NOTICE: Final[str] = "NO SAVED STAGE TO RESUME"
+"""Shown when resume was asked for and nothing has been saved yet."""
+
+STALE_CHECKPOINT_NOTICE: Final[str] = "SAVED STAGE IS NOT IN THIS PACK"
+"""Shown when a checkpoint names a level this pack no longer has.
+
+A save outlives the content it was made against. Matching by level identifier rather
+than by position is what stops a reordered or shortened pack from resuming the wrong
+stage, and saying so is better than silently starting a different one.
+"""
+
+CHANGED_CONTENT_NOTICE: Final[str] = "SAVED STAGE DATA HAS CHANGED"
+"""Shown when the level is still here but is no longer the stage that was saved.
+
+A level identifier names a stage and does not identify one: the same name appears in
+another pack, and a pack is edited in place. The checkpoint carries
+:func:`~battle_city_client.stage_adapter.stage_identity`, and a mismatch means the maze,
+the base, the spawns or the enemy quota moved under the save. Resuming anyway would hand
+a player a score and a life count they earned somewhere else, so the run is refused and
+the save is kept exactly as it is -- a pack that is swapped back makes it usable again.
+"""
+
+SAVED_BLOCK_NOTES: Final[dict[str, tuple[str, ...]]] = {
+    NO_CHECKPOINT_NOTICE: ("NONE YET",),
+    STALE_CHECKPOINT_NOTICE: ("OTHER PACK",),
+    CHANGED_CONTENT_NOTICE: ("STAGE DATA", "CHANGED"),
+}
+"""The same three refusals in the words the stage list has room for.
+
+Kept beside the notices rather than in the renderer, so a screen that is 12 characters
+wide and a line that is forty cannot come to say different things.
+"""
+
 NO_SERVER_NOTICE: Final[str] = "ONLINE NEEDS --SERVER --SESSION --TICKET"
 """Shown when online play was chosen without the details needed to reach a lobby."""
 
@@ -217,6 +258,17 @@ class ClientShell:
     pause_cause: PauseCause | None = None
     running: bool = True
     online_config: OnlineConfig | None = None
+    profile: LocalProfile = field(default_factory=LocalProfile)
+    """Local settings, campaign progress and cosmetics. In memory unless given a store.
+
+    The default profile has no store behind it, so a shell built without one reads and
+    writes no files at all; :func:`battle_city_client.app.main` is the only caller that
+    attaches one. Everything the shell does with it is additive: recording where a
+    campaign stood, raising a tally when a stage is cleared, and reading the badge the
+    HUD draws. No rule of the campaign, and nothing about an online match, is decided
+    from it.
+    """
+
     online: OnlineSession | None = field(default=None, init=False)
     outbox: list[ClientMessage] = field(default_factory=list, init=False, repr=False)
     notice: str = field(default="", init=False)
@@ -244,6 +296,65 @@ class ClientShell:
         if not self.catalog:
             return None
         return self.catalog[self.stage_index]
+
+    @property
+    def checkpoint(self) -> StageCheckpoint | None:
+        """The saved stage boundary this profile holds, if there is one."""
+        return self.profile.checkpoint
+
+    @property
+    def checkpoint_index(self) -> int | None:
+        """Where the saved *level identifier* appears in this catalog, if it does.
+
+        Matched by identifier, never by the saved position: a pack that gained, lost or
+        reordered a level would otherwise resume a stage the player never reached. This
+        is only half the question; see :attr:`resume_index`.
+        """
+        checkpoint = self.profile.checkpoint
+        return None if checkpoint is None else self._entry_index(checkpoint.level_id)
+
+    @property
+    def resume_index(self) -> int | None:
+        """Where the saved stage sits in this catalog, by identifier *and* by identity.
+
+        ``None`` when there is no save, when the identifier is not in this pack, or when
+        it is but the stage is no longer the one that was saved. :attr:`resume_notice`
+        says which.
+        """
+        checkpoint = self.profile.checkpoint
+        index = self.checkpoint_index
+        if checkpoint is None or index is None:
+            return None
+        if stage_identity(self.catalog[index]) != checkpoint.stage_identity:
+            return None
+        return index
+
+    @property
+    def resume_notice(self) -> str:
+        """Why the save cannot be picked up, or ``""`` when it can be.
+
+        One place decides it, so the stage list, the key that resumes and the line the
+        player reads can never disagree about whether there is a run waiting.
+        """
+        checkpoint = self.profile.checkpoint
+        if checkpoint is None:
+            return NO_CHECKPOINT_NOTICE
+        if self.checkpoint_index is None:
+            return STALE_CHECKPOINT_NOTICE
+        if self.resume_index is None:
+            return CHANGED_CONTENT_NOTICE
+        return ""
+
+    @property
+    def can_resume(self) -> bool:
+        """Whether a saved stage from this pack is waiting to be picked up."""
+        return self.resume_index is not None
+
+    def _entry_index(self, level_id: str) -> int | None:
+        for index, entry in enumerate(self.catalog):
+            if entry.level_id == level_id:
+                return index
+        return None
 
     @property
     def consumes_ticks(self) -> bool:
@@ -355,6 +466,7 @@ class ClientShell:
         self.pause_cause = None
         self.notice = ""
         if campaign.phase is CampaignPhase.PLAYING:
+            self._record_stage_start(campaign)
             self.screen = Screen.PLAYING
         else:
             self.run_over_index = 0
@@ -363,9 +475,12 @@ class ClientShell:
     def start_selected_stage(self) -> bool:
         """Start the campaign at the highlighted stage. Returns whether a run began.
 
-        Starting part-way through is the checkpoint policy, not a debug affordance: there
-        is no saved progress to resume from, so a player picks up where they choose, with
-        the campaign's starting lives and a score of zero.
+        Starting part-way through is the checkpoint policy, not a debug affordance: a
+        player picks up where they choose, with the campaign's starting lives and a score
+        of zero. That stays true now that progress is saved. The stage list is unchanged
+        and unrestricted -- every stage in the pack is selectable and every one of them
+        begins the same way -- and resuming a saved stage is a separate, explicit action,
+        :meth:`resume_campaign`, that has to be asked for.
         """
         if self.selected_entry is None:
             self.notice = EMPTY_CATALOG_NOTICE
@@ -381,6 +496,79 @@ class ClientShell:
             )
         )
         return True
+
+    def resume_campaign(self) -> bool:
+        """Pick the campaign up at the saved stage. Returns whether a run began.
+
+        The stage is replayed from the score and the lives it *opened* on, which are the
+        same two anchors :meth:`CampaignRun.restarted_stage` rewinds to, and from the seed
+        the campaign was started with rather than whatever this launch was given -- every
+        stream a stage draws from is derived from that seed, so resuming under another one
+        would be a different campaign wearing the same score. Choosing a stage from the
+        list is untouched by this and still starts fresh: see
+        :meth:`start_selected_stage`.
+        """
+        checkpoint = self.profile.checkpoint
+        index = self.resume_index
+        notice = self.resume_notice
+        if checkpoint is None or index is None:
+            # The save is left exactly as it is. A pack that is put back, or a level
+            # that is restored, makes it usable again; discarding it here would make a
+            # swapped content directory permanently destructive.
+            self.notice = notice
+            return False
+        self.stage_index = index
+        self.open_campaign(
+            CampaignRun.resumed(
+                campaign_plan(self.catalog, self.campaign_rules),
+                stage_index=index,
+                score=checkpoint.score,
+                lives=checkpoint.lives,
+                seed=checkpoint.seed,
+                rules=self.campaign_rules,
+                sim_rules=self.rules,
+                driver=self.driver,
+            )
+        )
+        return True
+
+    def _record_stage_start(self, campaign: CampaignRun) -> None:
+        """Save where the campaign now stands, as a stage boundary and nothing more.
+
+        The stage's identity comes from this shell's catalog entry for it. A campaign
+        playing a stage that is not in the catalog -- which nothing in the client does,
+        and a test assembling a plan by hand could -- is simply not written down: there
+        is no entry to identify it by, and a checkpoint that could not be matched on the
+        way back in would be a checkpoint that resumes the wrong content.
+        """
+        index = self._entry_index(campaign.stage.level_id)
+        if index is None:
+            return
+        self.profile.record_stage_start(
+            level_id=campaign.stage.level_id,
+            stage_index=campaign.stage_index,
+            score=campaign.stage_start_score,
+            lives=campaign.stage_start_lives,
+            seed=campaign.seed,
+            stage_identity=stage_identity(self.catalog[index]),
+        )
+
+    def _record_campaign_end(self, campaign: CampaignRun) -> None:
+        """Move the progression tally once, on the tick a campaign stopped.
+
+        A completed campaign cleared a stage to get there, so it counts as both. A failed
+        one still offers its score to the best-score reading, because the run happened.
+        """
+        match campaign.phase:
+            case CampaignPhase.STAGE_CLEARED:
+                self.profile.record_stage_cleared(campaign.score)
+            case CampaignPhase.COMPLETED:
+                self.profile.record_stage_cleared(campaign.score)
+                self.profile.record_campaign_completed(campaign.score)
+            case CampaignPhase.FAILED:
+                self.profile.record_run_score(campaign.score)
+            case CampaignPhase.PLAYING:
+                return
 
     def open_online(self) -> bool:
         """Begin an online session and queue the seat request. Returns whether it began.
@@ -496,6 +684,7 @@ class ClientShell:
             self.campaign = campaign.advance(ticks, intent)
             self.session = self.campaign.session
             if self.campaign.phase is not CampaignPhase.PLAYING:
+                self._record_campaign_end(self.campaign)
                 self.run_over_index = 0
                 self.screen = Screen.RUN_OVER
             return
@@ -560,14 +749,30 @@ class ClientShell:
                 self.stage_index = _wrapped(self.stage_index, 1, len(self.catalog))
             case Action.UI_CONFIRM:
                 self.start_selected_stage()
+            case Action.RESUME_SAVE:
+                self.resume_campaign()
             case Action.UI_CANCEL:
                 self._return_to_main_menu()
             case _:
                 return
 
     def _handle_controls(self, action: Action) -> None:
-        if action in (Action.UI_CONFIRM, Action.UI_CANCEL):
-            self._return_to_main_menu()
+        """The options screen: read the bindings, and choose a badge.
+
+        Up and down move through the badges this profile has earned; a locked one cannot
+        be reached, so there is no selection to refuse. The choice is written to the
+        profile as it is made, because there is no confirm step on this screen and a
+        preference that needed one would be lost by the key that leaves.
+        """
+        match action:
+            case Action.UI_UP:
+                self.profile.cycle_badge(-1)
+            case Action.UI_DOWN:
+                self.profile.cycle_badge(1)
+            case Action.UI_CONFIRM | Action.UI_CANCEL:
+                self._return_to_main_menu()
+            case _:
+                return
 
     def _handle_playing(self, action: Action) -> None:
         if action in (Action.TOGGLE_PAUSE, Action.UI_CANCEL):

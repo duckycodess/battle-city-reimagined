@@ -39,6 +39,7 @@ class Action(Enum):
     UI_CONFIRM = "ui_confirm"
     UI_CANCEL = "ui_cancel"
     TOGGLE_PAUSE = "toggle_pause"
+    RESUME_SAVE = "resume_save"
     ONLINE_READY = "online_ready"
     ONLINE_MODE = "online_mode"
     ONLINE_STAGE = "online_stage"

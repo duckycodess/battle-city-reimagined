@@ -15,6 +15,13 @@ display running at 144Hz and one running at 30Hz play the same run at the same s
 :meth:`ClientApp.advance_frame` takes the elapsed time as an argument so a test can prove
 that without a display.
 
+It is also where the local profile is opened. :class:`ClientShell` keeps settings and
+campaign progress in memory by default and writes nothing; a real launch is the one place
+that hands it a :class:`~battle_city_client.persistence.ProfileStore`, so a window and a
+save file come up together or not at all. Opening the profile cannot fail a launch: an
+unreadable file leaves the client on its defaults with a notice on screen. See
+:mod:`battle_city_client.persistence`.
+
 Audio is never initialised. ``pygame.init()`` brings up the mixer, which needs a sound
 device that a container, a CI runner or a headless desktop may not have; the client calls
 :func:`pygame.display.init` on its own and this build plays no sound, so there is nothing
@@ -38,27 +45,41 @@ from .intents import Action, HeldActions
 from .keymap import edge_action_for, held_action_for
 from .netlink import NetworkLink, open_tcp_link, parse_endpoint
 from .online import OnlineConfig
+from .persistence import (
+    DEFAULT_DISPLAY_NAME,
+    DEFAULT_FRAME_CAP,
+    MAX_FRAME_CAP,
+    MIN_FRAME_CAP,
+    LocalProfile,
+    LocalSettings,
+    ProfileStore,
+)
 from .rendering import Renderer
 from .session import DEFAULT_SEED
 from .shell import ClientShell
 from .stage_adapter import StageAdapterError, bundled_content_ref, bundled_stage_catalog
 from .timing import NOMINAL_TICK_RATE, FixedTickAccumulator
 
-DEFAULT_FRAME_CAP: int = 120
-"""Frames per second the loop aims for.
-
-A cap above the tick rate keeps input latency low without spinning a core; the
-accumulator makes the exact number irrelevant to how the run plays.
-"""
-
-MIN_FRAME_CAP: int = 1
-MAX_FRAME_CAP: int = 1000
-"""Bounds for ``--frame-cap``. Zero means "never wait" to pygame, which is a busy spin."""
-
 WINDOW_CAPTION: str = "Battle City Reimagined"
 
-DEFAULT_DISPLAY_NAME: str = "player"
-"""Roster name used when the launch did not supply one. Bounded by the protocol."""
+# ``DEFAULT_FRAME_CAP``, ``MIN_FRAME_CAP``, ``MAX_FRAME_CAP`` and ``DEFAULT_DISPLAY_NAME``
+# are imported above and re-exported here, where they have always been published. They are
+# defined in :mod:`battle_city_client.persistence.settings` because a saved settings file
+# is validated against exactly these bounds, and a launch flag that disagreed with the file
+# it is saved into would be two answers to one question.
+__all__ = [
+    "DEFAULT_DISPLAY_NAME",
+    "DEFAULT_FRAME_CAP",
+    "MAX_FRAME_CAP",
+    "MIN_FRAME_CAP",
+    "WINDOW_CAPTION",
+    "ClientApp",
+    "build_app",
+    "main",
+    "online_config",
+    "parse_args",
+    "parse_content_ref",
+]
 
 
 class ClientApp:
@@ -130,13 +151,25 @@ class ClientApp:
         if edge is None:
             return
         if edge is Action.SCALE_UP:
-            self.presenter.step_scale(1)
+            self._step_scale(1)
         elif edge is Action.SCALE_DOWN:
-            self.presenter.step_scale(-1)
+            self._step_scale(-1)
         else:
             self.shell.handle(edge)
             if not self.shell.drives_tank:
                 self.held.clear()
+
+    def _step_scale(self, delta: int) -> None:
+        """Resize the window, and remember the size the player settled on.
+
+        The scale is the one setting this build lets a player change while it is running,
+        so it is the one that is written back. The profile ignores a value that did not
+        move -- pressing ``+`` at the largest scale changes nothing and writes nothing --
+        and a profile with no file behind it, which is every profile but a real launch's,
+        writes nothing at all.
+        """
+        self.presenter.step_scale(delta)
+        self.shell.profile.remember_scale(self.presenter.requested_scale)
 
     def _set_focused(self, focused: bool) -> None:
         """Track focus, and forget held keys when the window stops receiving releases."""
@@ -265,6 +298,7 @@ def build_app(
     frame_cap: int = DEFAULT_FRAME_CAP,
     assets: AssetLibrary | None = None,
     online: OnlineConfig | None = None,
+    profile: LocalProfile | None = None,
 ) -> ClientApp:
     """Load the bundled stages, open a window and wire the client together.
 
@@ -274,9 +308,18 @@ def build_app(
     ``online`` is the lobby this client can reach, when it was given one. Without it the
     online menu entry says what is missing rather than disappearing, because a build
     that can play online and a launch that was not told where are two different things.
+
+    ``profile`` defaults to one with no file behind it, so building an app touches no
+    disk. :func:`main` is the only caller that attaches a store, because only a real
+    launch has a player whose settings and progress are worth keeping; a test, an
+    embedding or a headless run gets the same client with its persistence in memory.
     """
     shell = ClientShell(
-        catalog=bundled_stage_catalog(), seed=seed, rules=rules, online_config=online
+        catalog=bundled_stage_catalog(),
+        seed=seed,
+        rules=rules,
+        online_config=online,
+        profile=profile if profile is not None else LocalProfile(),
     )
     presenter = Presenter(
         scale=preferred_scale() if scale is None else scale, caption=WINDOW_CAPTION
@@ -285,8 +328,24 @@ def build_app(
     return ClientApp(shell, presenter, renderer, frame_cap=frame_cap)
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse the launch options."""
+def parse_args(
+    argv: Sequence[str] | None = None, *, profile: LocalProfile | None = None
+) -> argparse.Namespace:
+    """Parse the launch options, defaulting to what ``profile`` has saved.
+
+    A launch option always wins over a saved value, because it was typed for this launch.
+    What a saved profile changes is only what is used when nothing was typed, which is
+    why it arrives as the argparse *default* rather than as a later override: ``--help``
+    then prints the value the launch would actually use.
+
+    Without a profile this is exactly the parser it has always been, with the shipped
+    defaults, and a saved window scale is the one case with no fixed default to replace --
+    absent a saved scale the client still measures the desktop and picks one.
+    """
+    settings = LocalSettings() if profile is None else profile.settings
+    saved_scale = (
+        profile.settings.scale if profile is not None and profile.settings_restored else None
+    )
     parser = argparse.ArgumentParser(
         prog="battle_city_client",
         description="Play a bundled Battle City Reimagined stage.",
@@ -300,14 +359,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--scale",
         type=int,
-        default=None,
+        default=saved_scale,
         choices=range(theme.MIN_SCALE, theme.MAX_SCALE + 1),
-        help="whole-number window scale; the default is chosen from the desktop size",
+        help="whole-number window scale; the default is the saved one, or the desktop's",
     )
     parser.add_argument(
         "--frame-cap",
         type=_frame_cap,
-        default=DEFAULT_FRAME_CAP,
+        default=settings.frame_cap,
         help=(
             f"frames per second the loop aims for, {MIN_FRAME_CAP}-{MAX_FRAME_CAP} "
             "(default: %(default)s)"
@@ -333,7 +392,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--name",
-        default=DEFAULT_DISPLAY_NAME,
+        default=settings.display_name,
         metavar="NAME",
         help="roster name other players see (default: %(default)s)",
     )
@@ -394,6 +453,30 @@ def parse_content_ref(value: str) -> ContentRef:
     )
 
 
+def _launch_settings(options: argparse.Namespace, profile: LocalProfile) -> LocalSettings:
+    """What this launch is actually running with, as a settings record.
+
+    Adopted into the profile in memory and not written: a launch option is for one
+    launch, and a client that saved every flag it was handed would make ``--name`` and
+    ``--frame-cap`` permanent by accident. It matters anyway, because the file *is*
+    written when the player changes the window scale in game, and the record written then
+    should say what this session was running with rather than what the last one did.
+
+    A launch option the settings record will not accept -- a roster name with a space in
+    it, say -- leaves the saved settings alone rather than refusing to start. The option
+    still reaches the online path, where it is checked and reported as it always was, and
+    an offline launch has no business failing over a name nobody is going to read.
+    """
+    try:
+        return LocalSettings(
+            scale=profile.settings.scale if options.scale is None else options.scale,
+            frame_cap=options.frame_cap,
+            display_name=options.name,
+        )
+    except ValueError:
+        return profile.settings
+
+
 def _frame_cap(value: str) -> int:
     """Parse and bound ``--frame-cap``.
 
@@ -421,7 +504,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     SDL still initialised, which leaves a window on screen with nothing driving it and
     leaves the subsystem up for whatever runs next in the same interpreter.
     """
-    options = parse_args(argv)
+    profile = LocalProfile.load(ProfileStore())
+    options = parse_args(argv, profile=profile)
+    profile.adopt_settings(_launch_settings(options, profile))
     try:
         online = online_config(options)
     except (ValueError, MessageError) as error:
@@ -439,6 +524,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 scale=options.scale,
                 frame_cap=options.frame_cap,
                 online=online,
+                profile=profile,
             )
         except StageAdapterError as error:
             print(f"battle_city_client: {error}")
