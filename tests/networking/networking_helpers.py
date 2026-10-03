@@ -27,6 +27,16 @@ trial replays identically on any machine. Loss and reordering are deliberately a
 the shipped transport is reliable TCP, so a measurement that dropped messages would be
 measuring a transport this build does not have.
 
+The clamp that keeps arrivals ordered only ever moves one later, so it **biases the
+realized delay upward**: a message whose draw would have landed it before its
+predecessor waits instead. The bias is small — two to nine milliseconds on the downlink
+across the conditions measured, and under one tick of round trip in all of them — but it
+is real, and a jittery profile therefore does not deliver its nominal mean. Rather than
+claim otherwise, every trial measures what each direction actually did and reports it as
+:attr:`TrialResult.downlink_mean_delay_tenths` and
+:attr:`TrialResult.uplink_mean_delay_tenths`; the thresholds that compare a jittery row
+against a steady one are written knowing the two means differ.
+
 Measuring the two axes apart
 ----------------------------
 Constant latency and jitter do different things and are reported separately. A constant
@@ -35,6 +45,13 @@ delay shifts the whole snapshot stream later without changing its spacing, so it
 rate change the *spacing* at which new snapshots reach a frame, which is what a player
 sees as stutter. :class:`MotionTrace` measures the second; ``response_ms`` on
 :class:`TrialResult` measures the first.
+
+The two axes are *reported* apart, not *perfectly* separated: because of the ordering
+clamp above, a profile with jitter also carries a few milliseconds more mean delay than
+the same profile without it. That is why the jitter conditions each have a steady
+sibling at the same nominal delay, and why the realized mean is in the table — so a
+reader can see how much of a jittery row's response time is the extra delay rather than
+the wobble.
 
 Baseline and improved
 ---------------------
@@ -197,9 +214,11 @@ def session_config(pack: Pack, *, limits: SessionLimits | None = None) -> Sessio
 class LinkProfile:
     """One reproducible network condition, in whole milliseconds.
 
-    ``delay_ms`` is one way, so a round trip costs twice it. ``jitter_ms`` is the
-    symmetric bound on the wobble added to each delivery, which keeps the mean delay
-    equal to ``delay_ms`` and so keeps the jitter axis independent of the latency axis.
+    ``delay_ms`` is one way, so a round trip costs twice it. ``jitter_ms`` bounds the
+    wobble drawn for each delivery, symmetrically, so the *draw* has mean zero. What
+    actually arrives does not: the ordering clamp in :class:`DelayLine` can only move a
+    delivery later, so the realized mean sits a little above ``delay_ms``. Each trial
+    measures it; see :attr:`TrialResult.downlink_mean_delay_tenths`.
     """
 
     name: str
@@ -216,6 +235,17 @@ class LinkProfile:
         """One-way delay expressed in whole authoritative ticks, rounded down."""
         return self.delay_ms * TICK_RATE // MILLISECONDS_PER_SECOND
 
+    @property
+    def tick_aligned(self) -> bool:
+        """Whether this delay is a whole number of authoritative tick intervals.
+
+        Ticks fall at ``k * 1000 // 60``, so 0, 50, 100 and 200 ms are whole numbers of
+        tick intervals and 40 or 75 ms are not. It decides the best case for
+        :attr:`TrialResult.response_ms`, and the difference is a quantization rather than
+        a network effect: see that attribute.
+        """
+        return self.delay_ms * TICK_RATE % MILLISECONDS_PER_SECOND == 0
+
 
 class DelayLine[T]:
     """A lossless, in-order queue that holds each item for a bounded delay.
@@ -223,9 +253,25 @@ class DelayLine[T]:
     Arrival times are forced to be non-decreasing. That is what makes the queue a model
     of the reliable ordered stream the client actually has: jitter may bunch two
     messages together, but it can never deliver the second before the first.
+
+    The clamp is one-directional, and that has a consequence worth stating rather than
+    hiding. A draw that would have placed a message before its predecessor is held until
+    the predecessor lands, so the realized delay of that message is larger than it drew
+    and never smaller. Over a stream the realized mean therefore sits *above* the
+    nominal delay, by more as the jitter bound approaches the spacing between sends.
+    :meth:`mean_delay_tenths` reports what the line actually did, so no claim about the
+    latency a trial ran at has to be taken on trust.
     """
 
-    __slots__ = ("_delay_ms", "_jitter_ms", "_last_arrival", "_queue", "_rng")
+    __slots__ = (
+        "_delay_ms",
+        "_delivered",
+        "_jitter_ms",
+        "_last_arrival",
+        "_queue",
+        "_rng",
+        "_total_delay_ms",
+    )
 
     def __init__(self, *, delay_ms: int, jitter_ms: int, rng: Random) -> None:
         self._delay_ms = delay_ms
@@ -233,12 +279,16 @@ class DelayLine[T]:
         self._rng = rng
         self._queue: deque[tuple[int, T]] = deque()
         self._last_arrival = 0
+        self._delivered = 0
+        self._total_delay_ms = 0
 
     def send(self, now_ms: int, item: T) -> None:
         wobble = 0 if self._jitter_ms == 0 else self._rng.randint(-self._jitter_ms, self._jitter_ms)
         arrival = max(now_ms + max(self._delay_ms + wobble, 0), self._last_arrival)
         self._last_arrival = arrival
         self._queue.append((arrival, item))
+        self._delivered += 1
+        self._total_delay_ms += arrival - now_ms
 
     def take(self, now_ms: int) -> tuple[T, ...]:
         """Everything due at or before ``now_ms``, oldest first."""
@@ -246,6 +296,17 @@ class DelayLine[T]:
         while self._queue and self._queue[0][0] <= now_ms:
             ready.append(self._queue.popleft()[1])
         return tuple(ready)
+
+    def mean_delay_tenths(self) -> int:
+        """The mean delay this line actually imposed, in tenths of a millisecond.
+
+        Tenths rather than milliseconds because the bias the ordering clamp introduces
+        is a fraction of a millisecond at the gentler jitter bounds, and a reading that
+        rounded it away would be the claim it exists to replace.
+        """
+        if self._delivered == 0:
+            return 0
+        return (self._total_delay_ms * 10 + self._delivered // 2) // self._delivered
 
     def __len__(self) -> int:
         return len(self._queue)
@@ -341,8 +402,21 @@ class TrialResult:
     first_batch_ms: int | None
     first_motion_ms: int | None
     authoritative_x: tuple[int, ...]
+    downlink_mean_delay_tenths: int
+    uplink_mean_delay_tenths: int
     state_hash: str
     final_tick: int
+
+    @property
+    def realized_round_trip_tenths(self) -> int:
+        """The round trip this trial actually ran at, in tenths of a millisecond.
+
+        Not ``2 * profile.delay_ms``. The ordering clamp that keeps the stream in order
+        can only push a delivery later, so a jittery profile delivers a little slower
+        than it was asked to, and the figure that explains a response-time reading is
+        this one rather than the nominal.
+        """
+        return self.downlink_mean_delay_tenths + self.uplink_mean_delay_tenths
 
     @property
     def authoritative_still_ticks(self) -> int:
@@ -392,8 +466,25 @@ class TrialResult:
     def response_ms(self) -> int | None:
         """Milliseconds from offering the first input to seeing the tank move.
 
-        This is the constant-latency reading: a round trip, plus the tick the server
-        applied the input on, plus whatever the client's own presentation delays it by.
+        This is the constant-latency reading: a round trip, plus however long the batch
+        waits for a tick to apply it and the answering snapshot waits for a frame to
+        draw it, plus whatever the client's own presentation delays it by.
+
+        Those two waits are quantization, not network, and they vanish in a best case
+        the table happens to sit on. A session ticks at ``k * 1000 // 60`` and the
+        harness drains arrivals *before* running the tick they feed, exactly as a server
+        drains its socket before the tick it feeds. So a one-way delay that is a whole
+        number of tick intervals -- 50, 100 and 200 ms all are -- lands a batch in the
+        same millisecond as the tick that applies it, and lands the snapshot answering it
+        in the same millisecond as a frame: the round trip is paid and nothing is added.
+        A delay that is not a whole number of tick intervals waits, by up to a tick at
+        each end. Zero is the one aligned delay that still pays a tick, because a batch
+        offered during a frame is offered after that millisecond's delivery step has
+        already run and cannot be picked up until the next one.
+
+        :attr:`~LinkProfile.tick_aligned` is the flag, and
+        ``test_latency_baseline.py`` asserts both halves against a 75 ms profile that
+        deliberately misses.
         """
         if self.first_batch_ms is None or self.first_motion_ms is None:
             return None
@@ -524,6 +615,8 @@ def run_trial(
         first_batch_ms=first_batch_ms,
         first_motion_ms=first_motion_ms,
         authoritative_x=tuple(authoritative_x),
+        downlink_mean_delay_tenths=downlink.mean_delay_tenths(),
+        uplink_mean_delay_tenths=uplink.mean_delay_tenths(),
         state_hash=state_hash(game.state),
         final_tick=game.state.tick,
     )

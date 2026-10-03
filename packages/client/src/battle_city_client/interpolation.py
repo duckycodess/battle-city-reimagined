@@ -55,9 +55,11 @@ which is what happens after a stall -- a dragged window, a suspended laptop -- a
 stops the client playing an ever-growing backlog back in slow motion.
 
 The delay is the whole cost of this file: the picture is :data:`SMOOTHING_TICKS` ticks
-older than the newest snapshot, which at 60 Hz is 33 ms added to the response time
-measured in the baseline. That is a deliberate trade and it is recorded in the
-measurement table beside the stutter it buys.
+older than the newest snapshot, which at 60 Hz is at most 33 ms added to the response
+time measured in the baseline -- the full two ticks on a steady link, and less on a
+jittery one, where a frame was already waiting on a snapshot that had not arrived. That
+is a deliberate trade and it is recorded in the measurement table beside the stutter it
+buys.
 
 Teleports are not interpolated
 ------------------------------
@@ -84,8 +86,8 @@ MILLITICKS_PER_TICK: Final[int] = 1000
 SMOOTHING_TICKS: Final[int] = 2
 """How far behind the newest snapshot the picture is played back.
 
-Two ticks is 33 ms at 60 Hz, and it is the entire added input delay, so it is as small
-as it can be rather than as large as it could safely be. It has to be at least one, or
+Two ticks is 33 ms at 60 Hz, and it bounds the entire added input delay, so it is as
+small as it can be rather than as large as it could safely be. It has to be at least one, or
 the clock sits on the newest tick with nothing ahead of it to interpolate towards;
 beyond two the measurements showed no further improvement on any condition, because the
 jitter the clock has to absorb is handled by the per-frame correction rather than by the
@@ -332,5 +334,14 @@ def _lerp(start: int, end: int, numerator: int, denominator: int) -> int:
     Rounded rather than truncated, and that is not a detail. Truncating makes a tank
     moving two pixels a tick spend a third of its 120 fps frames apparently still, which
     is most of the stutter this module exists to remove.
+
+    Rounded on the magnitude, so a tank driving left is drawn in the mirror of where the
+    same tank driving right would be. Rounding the signed value instead sends a halfway
+    case towards negative infinity, which is away from the start one way down the stage
+    and towards it the other -- a one-pixel difference between two directions that the
+    simulation treats identically, and the sort of asymmetry that is invisible until
+    something compares two clients.
     """
-    return start + ((end - start) * numerator + denominator // 2) // denominator
+    distance = end - start
+    rounded = (abs(distance) * numerator + denominator // 2) // denominator
+    return start + rounded if distance >= 0 else start - rounded

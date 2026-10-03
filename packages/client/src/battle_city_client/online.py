@@ -178,12 +178,16 @@ class OnlineSession:
     board: RemoteBoard | None = None
     notice: str = ""
     closed_reason: RejectionCode | None = None
-    smoothing_ticks: int = SMOOTHING_TICKS
+    smoothing_ticks: int = field(default=SMOOTHING_TICKS, kw_only=True)
     """Ticks of playback delay the renderer draws with. Zero draws the newest snapshot.
 
     Read once, when the session is built, because playback delay is a property of the
     client rather than of a match: changing it mid-run would move the picture under the
     player. A measurement that wants the Phase 7 behaviour builds a session with zero.
+
+    Keyword-only, so that adding it did not renumber the positional arguments of a
+    session that existed before it. A caller that built one positionally still builds the
+    same session, and nothing has to know this field was inserted in the middle.
     """
     _token: str | None = field(default=None, repr=False)
     _sequence: int = 0

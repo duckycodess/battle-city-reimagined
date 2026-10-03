@@ -80,6 +80,29 @@ def test_a_projectile_is_interpolated_like_a_tank() -> None:
     assert drawn.shots[0].x == 41
 
 
+def test_the_same_motion_mirrored_is_drawn_mirrored() -> None:
+    """A tank driving left is drawn where the mirror of one driving right would be.
+
+    The blend rounds to whole pixels, and rounding a signed value sends a halfway case
+    towards negative infinity -- away from the start in one direction and towards it in
+    the other. Two clients watching the same pair of tanks would disagree by a pixel
+    about which had travelled further, over motion the simulation treats identically.
+    """
+    rightward = SnapshotInterpolator(smoothing_ticks=SMOOTHING_TICKS)
+    rightward.record(board_at(0, tanks=(tank_at(1, 100, 0),)))
+    rightward.record(board_at(1, tanks=(tank_at(1, 100 + TANK_SPEED, 0),)))
+    leftward = SnapshotInterpolator(smoothing_ticks=SMOOTHING_TICKS)
+    leftward.record(board_at(0, tanks=(tank_at(2, 100, 0),)))
+    leftward.record(board_at(1, tanks=(tank_at(2, 100 - TANK_SPEED, 0),)))
+
+    for numerator in range(0, MILLITICKS_PER_TICK, 37):
+        forward = _at(rightward, numerator).view()
+        backward = _at(leftward, numerator).view()
+        assert forward is not None
+        assert backward is not None
+        assert forward.tanks[0].x - 100 == 100 - backward.tanks[0].x, numerator
+
+
 # -- entities that appear and disappear ----------------------------------------
 
 

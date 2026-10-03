@@ -20,7 +20,9 @@ from pathlib import Path
 import pytest
 from battle_city_content import Pack
 from networking_helpers import (
+    MILLISECONDS_PER_SECOND,
     TANK_SPEED,
+    TICK_RATE,
     TRAVEL_TICKS,
     LinkProfile,
     TrialResult,
@@ -28,19 +30,52 @@ from networking_helpers import (
     write_pack,
 )
 
+TICK_MS: int = MILLISECONDS_PER_SECOND // TICK_RATE
+"""One authoritative tick in whole milliseconds, which is what a wait is measured in."""
+
 LATENCIES: tuple[LinkProfile, ...] = (
     LinkProfile(name="lan", delay_ms=0),
     LinkProfile(name="near", delay_ms=50),
     LinkProfile(name="far", delay_ms=100),
     LinkProfile(name="distant", delay_ms=200),
 )
-"""The four conditions the issue names, as one-way delays: 0, 3, 6 and 12 ticks."""
+"""The four conditions the issue names, as one-way delays: 0, 3, 6 and 12 ticks.
+
+All four are whole numbers of tick intervals, which is a coincidence of the numbers the
+issue chose and not a property of a network. :data:`SKEWED` is here so the table is not
+read as if it were.
+"""
+
+SKEWED = LinkProfile(name="skewed", delay_ms=75)
+"""A steady delay that is *not* a whole number of ticks: 4.5 of them at 60 Hz.
+
+Every delay the issue names happens to land a message in the same millisecond as the
+tick that will apply it, which is the best case for response time and makes the four
+rows above read as "exactly the round trip". A real link has no reason to oblige, so one
+profile deliberately does not.
+"""
+
+CONSTANT: tuple[LinkProfile, ...] = (*LATENCIES, SKEWED)
+"""Every steady condition. Nothing here wobbles, so nothing here should stutter."""
 
 JITTER = LinkProfile(name="jitter", delay_ms=50, jitter_ms=10, seed=20260115)
 """A 50 ms link that wobbles by up to 10 ms either way: a 20 ms spread across a 16 ms frame."""
 
 BURST = LinkProfile(name="burst", delay_ms=100, jitter_ms=25, seed=20260116)
 """A harsher wobble, 50 ms of spread, which is three ticks of bunching at 60 Hz."""
+
+FAR_BURST = LinkProfile(name="far-burst", delay_ms=200, jitter_ms=25, seed=20260117)
+"""The worst condition measured: the longest delay the issue names, wobbling hard.
+
+Its own row, because distance and wobble together are not the sum of their readings --
+the round trip costs the input stream so much that most of what is left to look at is
+the run standing still rather than anything a renderer decides.
+"""
+
+WOBBLY: tuple[LinkProfile, ...] = (JITTER, BURST, FAR_BURST)
+"""Every jittery condition."""
+
+EVERY_PROFILE: tuple[LinkProfile, ...] = (*CONSTANT, *WOBBLY)
 
 
 @pytest.fixture(scope="module")
@@ -49,10 +84,84 @@ def pack(tmp_path_factory: pytest.TempPathFactory) -> Pack:
     return write_pack(root)
 
 
+# -- what the link actually did ------------------------------------------------
+
+
+@pytest.mark.parametrize("profile", CONSTANT, ids=lambda profile: profile.name)
+def test_a_steady_link_delivers_exactly_the_delay_it_was_asked_for(
+    pack: Pack, profile: LinkProfile
+) -> None:
+    """Without jitter there is nothing for the ordering clamp to do."""
+    result = run_trial(pack, profile=profile, frame_rate=60)
+    assert result.downlink_mean_delay_tenths == profile.delay_ms * 10
+    assert result.uplink_mean_delay_tenths == profile.delay_ms * 10
+
+
+@pytest.mark.parametrize("profile", WOBBLY, ids=lambda profile: profile.name)
+@pytest.mark.parametrize("frame_rate", (60, 120))
+def test_a_jittery_downlink_runs_slower_than_its_nominal_delay(
+    pack: Pack, profile: LinkProfile, frame_rate: int
+) -> None:
+    """A jittery profile does not run at the delay on its label, and says so.
+
+    The delay line keeps arrivals in order, as reliable TCP does, by holding a message
+    that drew an early arrival until its predecessor has landed. That clamp can only
+    move a delivery later, so although the *draw* is symmetric and has mean zero, what
+    arrives does not. The downlink is where it shows: it carries a snapshot every single
+    tick, so a draw that would have overtaken its predecessor usually has one to
+    overtake, and the realized mean lands two to nine milliseconds above nominal.
+
+    It is measured rather than argued about, and it is the reason every jittery
+    condition in the table has a steady sibling at the same nominal delay: a reader
+    comparing the two rows can see how much of the difference is the extra milliseconds
+    and how much is the wobble.
+    """
+    result = run_trial(pack, profile=profile, frame_rate=frame_rate)
+    nominal = profile.delay_ms * 10
+    assert result.downlink_mean_delay_tenths > nominal
+    assert result.downlink_mean_delay_tenths <= nominal + profile.jitter_ms * 10
+
+
+@pytest.mark.parametrize("profile", WOBBLY, ids=lambda profile: profile.name)
+@pytest.mark.parametrize("frame_rate", (60, 120))
+def test_the_sparse_uplink_is_barely_biased_at_all(
+    pack: Pack, profile: LinkProfile, frame_rate: int
+) -> None:
+    """The same clamp costs the uplink almost nothing, which is the other half of it.
+
+    The client sends one batch per authoritative tick it has *seen*, and under jitter it
+    sees fewer, so the uplink is sparse: a draw rarely has a predecessor close enough to
+    be held behind. Its realized mean therefore sits within a millisecond or two of
+    nominal, on either side -- below it is the finite-sample noise of the draw, because
+    the clamp itself can only ever add.
+
+    Asserted separately from the downlink so that neither reading can be taken for the
+    other. The bias is a property of how densely a direction is used, not of the profile.
+    """
+    result = run_trial(pack, profile=profile, frame_rate=frame_rate)
+    nominal = profile.delay_ms * 10
+    assert abs(result.uplink_mean_delay_tenths - nominal) <= 2 * 10
+
+
+@pytest.mark.parametrize("profile", WOBBLY, ids=lambda profile: profile.name)
+@pytest.mark.parametrize("frame_rate", (60, 120))
+def test_the_bias_stays_under_a_tick(pack: Pack, profile: LinkProfile, frame_rate: int) -> None:
+    """The clamp costs milliseconds, not ticks, so a jittery row is still about wobble.
+
+    Stated as a threshold because it is the assumption every side-by-side reading in the
+    table rests on. If the bias ever grew past a tick, a jittery row would be measuring a
+    slower link as well as a less steady one, and comparing it with its steady sibling
+    would stop meaning anything.
+    """
+    result = run_trial(pack, profile=profile, frame_rate=frame_rate)
+    excess = result.realized_round_trip_tenths - profile.round_trip_ms * 10
+    assert 0 < excess < TICK_MS * 10
+
+
 # -- the latency axis ----------------------------------------------------------
 
 
-@pytest.mark.parametrize("profile", LATENCIES, ids=lambda profile: profile.name)
+@pytest.mark.parametrize("profile", CONSTANT, ids=lambda profile: profile.name)
 def test_constant_latency_does_not_stutter(pack: Pack, profile: LinkProfile) -> None:
     """At 60 fps on a 60 Hz session, a constant delay costs nothing but time.
 
@@ -68,17 +177,42 @@ def test_constant_latency_does_not_stutter(pack: Pack, profile: LinkProfile) -> 
     assert result.trace.frames >= TRAVEL_TICKS - 2
 
 
-@pytest.mark.parametrize("profile", LATENCIES, ids=lambda profile: profile.name)
+@pytest.mark.parametrize("profile", CONSTANT, ids=lambda profile: profile.name)
 def test_response_time_tracks_the_round_trip(pack: Pack, profile: LinkProfile) -> None:
-    """Time from offering an input to seeing it is a round trip plus about a tick.
+    """Time from offering an input to seeing it is a round trip plus at most two ticks.
 
-    The allowance is a frame either side: the input is offered on a frame boundary and
-    the movement is seen on one, and at 60 fps a frame is 17 ms.
+    The two ticks are the waits either end: a batch waits for the tick that applies it
+    and the answering snapshot waits for a frame that draws it.
     """
     result = run_trial(pack, profile=profile, frame_rate=60)
     response = result.response_ms
     assert response is not None
-    assert profile.round_trip_ms <= response <= profile.round_trip_ms + 50
+    assert profile.round_trip_ms <= response <= profile.round_trip_ms + 2 * TICK_MS
+
+
+@pytest.mark.parametrize("profile", CONSTANT, ids=lambda profile: profile.name)
+def test_a_delay_off_the_tick_boundary_costs_an_extra_tick(
+    pack: Pack, profile: LinkProfile
+) -> None:
+    """The four delays the issue names sit on a best case the table should not hide.
+
+    A session ticks at ``k * 1000 // 60`` and drains arrivals before running the tick
+    they feed. A one-way delay that is a whole number of tick intervals therefore lands
+    a batch in the same millisecond as the tick that applies it, and the snapshot
+    answering it in the same millisecond as a frame: the response is the round trip and
+    nothing more. 50, 100 and 200 ms all happen to be whole numbers of ticks. 75 ms is
+    not, and pays for it.
+
+    Zero is the one aligned delay that still pays a tick, because a batch is offered
+    during a frame, which is after that millisecond's delivery step has already run.
+    """
+    result = run_trial(pack, profile=profile, frame_rate=60)
+    response = result.response_ms
+    assert response is not None
+    if profile.tick_aligned and profile.delay_ms > 0:
+        assert response == profile.round_trip_ms
+    else:
+        assert profile.round_trip_ms < response <= profile.round_trip_ms + 2 * TICK_MS
 
 
 # -- the frame-rate axis -------------------------------------------------------
@@ -100,7 +234,7 @@ def test_the_frame_rate_axis_is_independent_of_the_latency_axis(pack: Pack) -> N
     """Duplicated frames at 120 fps are the same count at every constant delay."""
     duplicated = {
         profile.name: run_trial(pack, profile=profile, frame_rate=120).trace.still_permille
-        for profile in LATENCIES
+        for profile in CONSTANT
     }
     assert all(value >= 450 for value in duplicated.values()), duplicated
 
@@ -108,7 +242,7 @@ def test_the_frame_rate_axis_is_independent_of_the_latency_axis(pack: Pack) -> N
 # -- the jitter axis -----------------------------------------------------------
 
 
-@pytest.mark.parametrize("profile", (JITTER, BURST), ids=lambda profile: profile.name)
+@pytest.mark.parametrize("profile", WOBBLY, ids=lambda profile: profile.name)
 def test_jitter_both_stalls_and_doubles_frames(pack: Pack, profile: LinkProfile) -> None:
     """Wobble bunches snapshots, so some frames show nothing and others show two ticks.
 
@@ -121,7 +255,7 @@ def test_jitter_both_stalls_and_doubles_frames(pack: Pack, profile: LinkProfile)
     assert result.trace.max_step >= 2 * TANK_SPEED
 
 
-@pytest.mark.parametrize("profile", (JITTER, BURST), ids=lambda profile: profile.name)
+@pytest.mark.parametrize("profile", WOBBLY, ids=lambda profile: profile.name)
 def test_jitter_costs_the_input_stream_whole_ticks(pack: Pack, profile: LinkProfile) -> None:
     """Under jitter the server runs ticks this client supplied no input for.
 
@@ -150,7 +284,7 @@ def test_jitter_costs_the_input_stream_whole_ticks(pack: Pack, profile: LinkProf
 # -- what the link never costs -------------------------------------------------
 
 
-@pytest.mark.parametrize("profile", (*LATENCIES, JITTER, BURST), ids=lambda profile: profile.name)
+@pytest.mark.parametrize("profile", EVERY_PROFILE, ids=lambda profile: profile.name)
 def test_no_link_condition_is_refused(pack: Pack, profile: LinkProfile) -> None:
     """Latency and jitter never push this client into a server bound.
 
@@ -164,7 +298,7 @@ def test_no_link_condition_is_refused(pack: Pack, profile: LinkProfile) -> None:
     assert result.rate_limited == 0
 
 
-@pytest.mark.parametrize("profile", LATENCIES, ids=lambda profile: profile.name)
+@pytest.mark.parametrize("profile", CONSTANT, ids=lambda profile: profile.name)
 def test_constant_latency_delivers_every_batch_to_its_own_tick(
     pack: Pack, profile: LinkProfile
 ) -> None:

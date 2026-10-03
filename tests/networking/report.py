@@ -23,17 +23,26 @@ from networking_helpers import LinkProfile, TrialResult, run_trial, write_pack
 PROFILES: tuple[LinkProfile, ...] = (
     LinkProfile(name="0 ms", delay_ms=0),
     LinkProfile(name="50 ms", delay_ms=50),
+    LinkProfile(name="75 ms", delay_ms=75),
     LinkProfile(name="100 ms", delay_ms=100),
     LinkProfile(name="200 ms", delay_ms=200),
     LinkProfile(name="50 ms +/-10", delay_ms=50, jitter_ms=10, seed=20260115),
     LinkProfile(name="100 ms +/-25", delay_ms=100, jitter_ms=25, seed=20260116),
+    LinkProfile(name="200 ms +/-25", delay_ms=200, jitter_ms=25, seed=20260117),
 )
+"""The conditions in the table.
+
+75 ms is here because every delay the issue names is a whole number of ticks, which is
+the best case for response time; a profile that is not keeps the table honest about it.
+The seeds match the ones ``test_latency_baseline.py`` asserts against.
+"""
 
 FRAME_RATES: tuple[int, ...] = (60, 120)
 
 COLUMNS: tuple[str, ...] = (
     "condition",
     "fps",
+    "realized rtt ms",
     "still frames",
     "skipped-tick frames",
     "response ms",
@@ -66,6 +75,7 @@ def _row(result: TrialResult) -> tuple[str, ...]:
     return (
         result.profile.name,
         str(result.frame_rate),
+        f"{result.realized_round_trip_tenths / 10:.1f}",
         f"{trace.still_frames}/{trace.frames} ({trace.still_permille / 10:.1f}%)",
         str(trace.double_steps),
         "-" if result.response_ms is None else str(result.response_ms),
