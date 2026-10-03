@@ -23,7 +23,7 @@ def test_the_palette_stays_inside_the_panel_as_the_vocabulary_grows() -> None:
     span_w, span_h = layout.PALETTE_SPAN
     assert layout.PALETTE_ORIGIN[0] + span_w <= panel_x + panel_w
     assert layout.PALETTE_ORIGIN[1] + span_h < panel_y + panel_h
-    assert layout.PALETTE_ROWS * layout.SWATCH_COLUMNS >= len(layout.PALETTE_TILES)
+    assert len(layout.PALETTE_TILES) <= layout.PALETTE_ROWS * layout.SWATCH_COLUMNS
     assert layout.SWATCH_INSET >= 0
     assert layout.SWATCH_SIZE >= layout.TILE_SIZE
 
