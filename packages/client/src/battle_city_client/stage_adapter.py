@@ -16,10 +16,13 @@ Nothing in this module reads a clock, a display or the environment, and
 given. :func:`bundled_stage_catalog` is the one entry point that reaches the filesystem,
 and it does so only through the content loader.
 
-Waves are not translated. ``Level.waves`` is carried by the content record, but the
-simulation has no wave scheduler and this phase does not invent one: enemy cadence is
-campaign policy and belongs to a later phase with accepted gameplay rules. Dropping the
-field here is explicit rather than accidental.
+Waves do not reach the stage. ``Level.waves`` is carried onto :class:`StageEntry` as a
+tuple of counts, because the campaign needs to know how many enemies a stage releases, but
+:func:`stage_from_level` drops it: the simulation has no wave scheduler, and a level that
+declares waves must adapt to exactly the same :class:`~battle_city_sim.Stage` as one that
+does not. Reading those counts is
+:mod:`battle_city_client.campaign.plan`'s job, and interpreting them -- cadence, variant
+mix, win timing -- is the campaign's.
 """
 
 from __future__ import annotations
@@ -46,6 +49,13 @@ class StageEntry:
     level_id: str
     name: str
     stage: Stage
+    waves: tuple[int, ...] = ()
+    """Enemy counts the level declared, in declaration order; empty when it declared none.
+
+    Carried, not interpreted. The campaign reads it as a stage's enemy quota and the
+    simulation never sees it. It defaults to empty so a caller that only wants a playable
+    stage -- a test, a free-standing run -- can build an entry without wave data.
+    """
 
     @property
     def player_slots(self) -> tuple[int, ...]:
@@ -118,7 +128,12 @@ def stage_catalog(pack: Pack) -> tuple[StageEntry, ...]:
     unplayable level fails the whole catalog instead of silently shortening the menu.
     """
     return tuple(
-        StageEntry(level_id=level.level_id, name=level.name, stage=stage_from_level(level))
+        StageEntry(
+            level_id=level.level_id,
+            name=level.name,
+            stage=stage_from_level(level),
+            waves=tuple(wave.enemies for wave in level.waves),
+        )
         for level in pack.levels
     )
 

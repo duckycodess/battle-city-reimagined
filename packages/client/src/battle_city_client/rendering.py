@@ -10,11 +10,15 @@ Two drawing decisions follow the specifications rather than taste. Forest is dra
 the actors because the content specification calls it an overlay that permits movement
 and may conceal; the simulation has an explicit visibility rule with no gameplay effect
 yet, so concealment here is exactly what it says it is, a thing drawn on top. And every
-HUD reading is a fact the simulation state already holds -- tick, lives, effect timers,
-live shots, tanks on the board, whether the base still stands -- with no total the client
-accumulated. There is no score line, because the product specification defers scoring to
-an accepted gameplay proposal and the simulation reports points as events rather than
-keeping a total.
+HUD reading is a fact something else already holds: tick, lives, effect timers, live
+shots and the base come from the simulation state, and score, stage position and enemies
+remaining come from the campaign run. The renderer adds up nothing and remembers nothing
+between frames.
+
+The interstitial -- stage clear, campaign complete, or a failure -- is drawn from the
+wording the shell publishes rather than from a table here, because what the first entry
+*does* depends on the campaign phase and a label that disagreed with it would be worse
+than no label. See :attr:`ClientShell.interstitial_labels`.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from battle_city_sim import Faction, RunOutcome, SimulationState, Tile, TileGrid
 
 from . import theme
 from .assets import AssetLibrary
+from .campaign import CampaignRun
 from .glyphs import GLYPH_HEIGHT, line_step, text_width
 from .keymap import CONTROL_HELP
 from .online import OnlinePhase, OnlineSession
@@ -37,11 +42,9 @@ from .shell import (
     OUTCOME_HEADLINES,
     PAUSE_CAUSE_NOTICES,
     PAUSE_LABELS,
-    RUN_OVER_LABELS,
     ClientShell,
     MainMenuItem,
     PauseItem,
-    RunOverItem,
     Screen,
 )
 
@@ -51,18 +54,21 @@ CURSOR: str = ">"
 HUD_PADDING: int = 4
 MARGIN: int = 8
 STAGE_SELECT_NOTE: tuple[str, ...] = (
-    "ENEMY WAVE",
-    "CADENCE AND",
-    "STAGE",
-    "VICTORY ARE",
-    "LATER-PHASE",
-    "WORK.",
+    "STARTS THE",
+    "CAMPAIGN AT",
+    "THIS STAGE.",
+    "",
+    "ENEMIES DO",
+    "NOT FIRE IN",
+    "THIS BUILD.",
 )
-"""Said plainly on the stage list rather than implied by an empty board.
+"""Said plainly on the stage list rather than left for a player to work out.
 
-This build ships the playable shell: real movement, real firing, real terrain damage. It
-ships no enemy behaviour and no wave scheduler, because those are the AI and campaign
-phases and inventing them in the client would put game rules in the presentation layer.
+Two facts a player would otherwise discover the hard way. Choosing a stage starts the
+whole campaign there, with the starting lives and a score of zero, because there is no
+saved progress to resume from. And the enemies this build spawns hold position and never
+fire: steering belongs to the AI package, which the client may not depend on, so the
+campaign takes an injected driver and ships the one that commands nobody.
 """
 
 
@@ -250,7 +256,7 @@ class Renderer:
         if session is None:
             return
         self._draw_playfield(surface, session)
-        self._draw_hud(surface, session)
+        self._draw_hud(surface, session, shell.campaign)
 
     def _draw_terrain(
         self, surface: pygame.Surface, grid: TileGrid, *, base_destroyed: bool
@@ -303,7 +309,9 @@ class Renderer:
             1,
         )
 
-    def _draw_hud(self, surface: pygame.Surface, session: StageSession) -> None:
+    def _draw_hud(
+        self, surface: pygame.Surface, session: StageSession, campaign: CampaignRun | None
+    ) -> None:
         state = session.state
         panel = pygame.Rect(*theme.HUD_ORIGIN, *theme.HUD_SIZE)
         self._panel(surface, panel)
@@ -317,7 +325,16 @@ class Renderer:
         y += line_step() + 4
 
         tank = session.player_tank
-        readings: tuple[tuple[str, str, theme.Color], ...] = (
+        campaign_readings: tuple[tuple[str, str, theme.Color], ...] = (
+            ()
+            if campaign is None
+            else (
+                ("SCORE", str(campaign.score), theme.ACCENT),
+                ("STAGE", f"{campaign.stage_number}/{campaign.stage_count}", theme.TEXT),
+                ("ENEMIES", str(campaign.enemies_remaining), theme.TEXT),
+            )
+        )
+        readings: tuple[tuple[str, str, theme.Color], ...] = campaign_readings + (
             ("TICK", str(state.tick), theme.TEXT),
             ("LIVES", str(session.player.lives), theme.TEXT),
             (
@@ -328,7 +345,6 @@ class Renderer:
             ("GATLING", str(tank.gatling_ticks if tank else 0), theme.TEXT),
             ("SHIELD", str(tank.invincible_ticks if tank else 0), theme.TEXT),
             ("SHOTS", str(len(state.projectiles)), theme.TEXT),
-            ("TANKS", str(len(state.tanks)), theme.TEXT),
         )
         for label, value, color in readings:
             self.text(surface, label, (left, y), theme.TEXT_DIM)
@@ -619,26 +635,40 @@ class Renderer:
         self.text_centered(surface, "ESC RESUMES", center_x, panel.bottom - 16, theme.TEXT_DIM)
 
     def _draw_run_over_overlay(self, surface: pygame.Surface, shell: ClientShell) -> None:
+        """The interstitial: a stage cleared, a campaign completed, or a run lost.
+
+        One overlay for all three, because :class:`Screen` gains no members in this phase
+        (see the shell's module docstring and issue #36). Every word on it comes from the
+        shell, so the label on the first entry and the action behind it are decided in one
+        place and cannot drift apart.
+        """
         self._dim(surface)
         center_x = theme.LOGICAL_SIZE[0] // 2
-        panel = pygame.Rect(0, 0, 240, 132)
+        panel = pygame.Rect(0, 0, 240, 144)
         panel.center = (center_x, theme.LOGICAL_SIZE[1] // 2)
         self._panel(surface, panel)
-        outcome = shell.outcome
-        headline = "RUN ENDED" if outcome is None else OUTCOME_HEADLINES[outcome]
-        self.text_centered(surface, "RUN OVER", center_x, panel.y + 12, theme.DANGER, 2)
+        title_color = theme.DANGER if shell.interstitial_is_failure else theme.OK
+        self.text_centered(
+            surface, shell.interstitial_title, center_x, panel.y + 12, title_color, 2
+        )
+        headline = shell.interstitial_headline
         self.text_centered(surface, headline, center_x, panel.y + 36, theme.TEXT)
+        y = panel.y + 36 + line_step()
+        campaign = shell.campaign
+        if campaign is not None:
+            self.text_centered(surface, f"SCORE {campaign.score}", center_x, y, theme.ACCENT)
+            y += line_step()
         session = shell.session
         if session is not None:
-            self.text_centered(
-                surface,
-                f"TICK {session.state.tick}",
-                center_x,
-                panel.y + 36 + line_step(),
-                theme.TEXT_DIM,
-            )
-        labels = [RUN_OVER_LABELS[item] for item in RunOverItem]
-        self._menu(surface, labels, shell.run_over_index, center_x, panel.y + 74, scale=1)
+            self.text_centered(surface, f"TICK {session.state.tick}", center_x, y, theme.TEXT_DIM)
+        self._menu(
+            surface,
+            shell.interstitial_labels,
+            shell.run_over_index,
+            center_x,
+            panel.y + 86,
+            scale=1,
+        )
 
 
 def faction_color(faction: Faction) -> theme.Color:

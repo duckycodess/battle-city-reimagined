@@ -24,26 +24,45 @@ test that this package cannot fix from inside its own allowed files.
 
 What this build is
 ------------------
-A playable client foundation. Movement, firing, terrain damage, brick decay, projectile
-reflection and the base are the simulation's, driven by real keyboard input at a fixed
-tick rate. What is *not* here is equally deliberate: no enemy behaviour, no wave
-scheduler and no stage victory. The simulation ships none of those -- enemies are
-first-class actors that only move when something commands them, and the product
-specification defers wave pacing and win-state timing to an accepted gameplay proposal --
-so the client shows the board honestly rather than inventing a rule in the presentation
-layer. Enemy waves arrive with the AI phase and stage victory with the campaign phase.
+A playable single-player campaign. Movement, firing, terrain damage, brick decay,
+projectile reflection and the base are the simulation's, driven by real keyboard input at
+a fixed tick rate. Enemy quotas, spawn cadence, score, lives across stages, stage clear,
+campaign victory and the restart policy are :mod:`battle_city_client.campaign`'s, as
+accepted in ``openspec/changes/campaign-v1`` and recorded in the product specification.
 
-Terminal screens are drawn for outcomes the simulation recorded, and the client never
-records one. Since no live run can currently reach an outcome, the terminal presentation
-is covered by tests that assemble a finished state themselves; those captures are labelled
-as fixtures.
+One thing is deliberately missing and is said plainly rather than implied: **the enemies
+this build spawns hold position and never fire.** Steering belongs to ``battle_city_ai``,
+and the architecture specification allows ``client -> sim, content, protocol`` and not
+``client -> ai``, so the campaign takes an injected ``EnemyCommandDriver`` and the client
+injects the one that commands nobody. ``tests/campaign`` injects a driver backed by the AI
+package to show the seam carries a real bot; giving the shipped client one is issue #35.
+
+There is also an online path, and it is a different game to the campaign rather than the
+campaign over a wire. A client joins a server-owned lobby, agrees to the settings it is
+shown, and plays a co-op match the server runs: it steps no simulation, keeps no local
+copy, and draws the last snapshot it was sent. The campaign's waves, score and lives are
+the single-player campaign's and are not yet run by a server, so an online match is the
+shared simulation on an agreed stage and nothing more; see ``online.py`` and the
+networking specification.
+
+Failure is still only ever the simulation's: the client reads
+``SimulationState.outcome`` and never sets one, and the campaign's ``FAILED`` phase is
+derived from that same field. A base destroyed by a player's own shot is absorbed like
+stone, so with enemies that do not fire a run ends by running out of lives only if the
+player drives into something that can kill them -- which, in this build, nothing can. The
+terminal presentation is therefore still exercised by tests that assemble a finished state
+themselves, and those captures are labelled as fixtures.
 
 Layout
 ------
 ``stage_adapter``  pure, validated ``Level`` to ``Stage`` mapping (no pygame, no clock)
+``campaign``       the single-player campaign: waves, score, lives, win and loss
 ``timing``         elapsed milliseconds to whole ticks, in exact integers
 ``intents``        device-independent actions and the intent one tick is built from
 ``session``        one run: intent becomes legal simulation commands, nothing more
+``online``         one hosted match from the client's side: lobby, handover, remote run
+``remote``         a server snapshot read into something the renderer can draw
+``netlink``        the transport the online session is pumped through (no pygame)
 ``shell``          the screen state machine, testable without a window
 ``keymap``         keycode tables, split by screen
 ``theme``          palette and the fixed logical frame
@@ -57,6 +76,16 @@ Layout
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Final
 
+from .campaign import (
+    DEFAULT_CAMPAIGN_RULES,
+    CampaignPhase,
+    CampaignRules,
+    CampaignRun,
+    EnemyCommandDriver,
+    IdleEnemyDriver,
+    StagePlan,
+    campaign_plan,
+)
 from .intents import Action, HeldActions, PlayerIntent, intent_from_held
 from .netlink import NetworkLink, TcpLink, open_tcp_link, parse_endpoint
 from .online import LobbyView, OnlineConfig, OnlinePhase, OnlineSession
@@ -120,15 +149,21 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "DEFAULT_CAMPAIGN_RULES",
+    "DEFAULT_SEED",
+    "NOMINAL_TICK_RATE",
     "Action",
     "AssetLibrary",
+    "CampaignPhase",
+    "CampaignRules",
+    "CampaignRun",
     "ClientApp",
     "ClientShell",
-    "DEFAULT_SEED",
+    "EnemyCommandDriver",
     "FixedTickAccumulator",
     "HeldActions",
+    "IdleEnemyDriver",
     "LobbyView",
-    "NOMINAL_TICK_RATE",
     "NetworkLink",
     "OnlineConfig",
     "OnlinePhase",
@@ -143,12 +178,14 @@ __all__ = [
     "Screen",
     "StageAdapterError",
     "StageEntry",
+    "StagePlan",
     "StageSession",
     "TcpLink",
     "board_from_snapshot",
     "build_app",
     "bundled_content_ref",
     "bundled_stage_catalog",
+    "campaign_plan",
     "content_ref_for",
     "integer_scale",
     "intent_from_held",

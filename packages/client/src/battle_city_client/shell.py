@@ -14,11 +14,37 @@ Two behaviours are choices rather than consequences, and are recorded as such:
   resumes the instant it is clicked resumes while the click is still landing, and the
   player is back in the run before they are looking at it. The pause screen says which
   of the two causes it is showing, so the state is never ambiguous.
-* **Terminal screens are shown for outcomes the simulation recorded, and for nothing
-  else.** The shell reads :attr:`SimulationState.outcome`; it never sets one. This build
-  ships no enemy behaviour and no wave scheduler, so no live run can reach an outcome,
-  and that is the honest state of the game rather than a gap to paper over with a
-  client-side rule. Stage victory and enemy waves arrive with the campaign and AI phases.
+* **Failure is still only ever the simulation's.** The shell reads
+  :attr:`SimulationState.outcome` and never sets one, and so does the campaign: its
+  ``FAILED`` phase is derived from that field rather than decided beside it. What the
+  campaign adds is the other direction -- a stage cleared and a campaign completed -- which
+  the simulation has no value for and should not have one for.
+
+Campaign and free play
+----------------------
+Choosing a stage starts the campaign *at that stage*. There is only one mode: the product
+specification asks that a mode supply rules and content to the shared simulation rather
+than fork it, and with no saved progress the stage list is also the whole checkpoint
+story. A run that reaches a stage clear, a campaign completion or a failure shows the
+interstitial on :attr:`Screen.RUN_OVER`, whose wording and menu come from the campaign
+phase.
+
+The shell still supports a campaign-less session, because :meth:`open_session` takes one
+directly and the presentation tests drive terminal screens that way. When a campaign is
+running, :attr:`session` holds that campaign's session, so everything that reads a session
+-- the renderer, the HUD, a test -- is unaffected by which of the two started it.
+
+:attr:`session` is *written* as well as read, and that direction is part of the contract
+rather than an accident of it being a public field: a caller assembles a state and assigns
+it, which is how a test reaches a terminal screen without enemy behaviour to reach it
+with. A running campaign therefore adopts whatever :attr:`session` holds at the top of
+:meth:`advance` and re-reads its phase from it, instead of overwriting the assignment with
+the session it last produced.
+
+:attr:`Screen` deliberately gains no members. A stage clear and a campaign completion each
+deserve their own screen, and
+``tests/client/test_client_presentation.py::test_every_screen_draws_something`` asserts
+every member is drawn by a test this issue may not edit. Issue #36 owns that split.
 """
 
 from __future__ import annotations
@@ -30,6 +56,15 @@ from typing import Final
 from battle_city_protocol import ClientMessage, MatchMode, ServerMessage
 from battle_city_sim import DEFAULT_RULES, Rules, RunOutcome
 
+from .campaign import (
+    DEFAULT_CAMPAIGN_RULES,
+    CampaignPhase,
+    CampaignRules,
+    CampaignRun,
+    EnemyCommandDriver,
+    IdleEnemyDriver,
+    campaign_plan,
+)
 from .intents import IDLE_INTENT, Action, PlayerIntent
 from .online import OnlineConfig, OnlinePhase, OnlineSession
 from .session import DEFAULT_SEED, StageSession
@@ -105,7 +140,28 @@ OUTCOME_HEADLINES: Final[dict[RunOutcome, str]] = {
     RunOutcome.BASE_DESTROYED: "BASE DESTROYED",
     RunOutcome.PLAYERS_ELIMINATED: "ALL LIVES LOST",
 }
-"""Wording for each outcome the simulation can record. There is no win outcome yet."""
+"""Wording for each failure the simulation can record. Victory is a campaign phase."""
+
+INTERSTITIAL_TITLES: Final[dict[CampaignPhase, str]] = {
+    CampaignPhase.PLAYING: "PAUSED",
+    CampaignPhase.STAGE_CLEARED: "STAGE CLEAR",
+    CampaignPhase.COMPLETED: "CAMPAIGN COMPLETE",
+    CampaignPhase.FAILED: "GAME OVER",
+}
+"""Headline for each campaign phase. ``PLAYING`` never reaches the interstitial."""
+
+INTERSTITIAL_PRIMARY_LABELS: Final[dict[CampaignPhase, str]] = {
+    CampaignPhase.PLAYING: "RESUME",
+    CampaignPhase.STAGE_CLEARED: "NEXT STAGE",
+    CampaignPhase.COMPLETED: "PLAY AGAIN",
+    CampaignPhase.FAILED: "RESTART CAMPAIGN",
+}
+"""What the first interstitial entry does, said in the words of what it does.
+
+A cleared stage continues; a completed or failed campaign starts over. The free-play
+wording stays :data:`RUN_OVER_LABELS`, because a campaign-less session has one stage and
+retrying it is all there is.
+"""
 
 EMPTY_CATALOG_NOTICE: Final[str] = "NO STAGES AVAILABLE"
 
@@ -143,6 +199,14 @@ class ClientShell:
     catalog: tuple[StageEntry, ...]
     seed: int = DEFAULT_SEED
     rules: Rules = DEFAULT_RULES
+    campaign_rules: CampaignRules = DEFAULT_CAMPAIGN_RULES
+    driver: EnemyCommandDriver = field(default_factory=IdleEnemyDriver)
+    """Who commands the enemy tanks. The default commands nobody; see ``campaign/driver``.
+
+    A field rather than a constant so a test -- or a later build with a declared dependency
+    on the AI package -- injects a real one without the shell learning what a bot is.
+    """
+    campaign: CampaignRun | None = None
     screen: Screen = Screen.MAIN_MENU
     main_index: int = 0
     stage_index: int = 0
@@ -210,8 +274,50 @@ class ClientShell:
 
     @property
     def outcome(self) -> RunOutcome | None:
-        """The outcome the simulation recorded for the current run, if any."""
+        """The failure the simulation recorded for the current run, if any."""
         return None if self.session is None else self.session.state.outcome
+
+    @property
+    def phase(self) -> CampaignPhase | None:
+        """The campaign's phase, or ``None`` when no campaign is running."""
+        return None if self.campaign is None else self.campaign.phase
+
+    @property
+    def interstitial_title(self) -> str:
+        """The headline on the screen shown when a run stops."""
+        if self.campaign is None:
+            return "RUN OVER"
+        return INTERSTITIAL_TITLES[self.campaign.phase]
+
+    @property
+    def interstitial_headline(self) -> str:
+        """The line under the headline: why the run stopped, in one phrase."""
+        outcome = self.outcome
+        if outcome is not None:
+            return OUTCOME_HEADLINES[outcome]
+        campaign = self.campaign
+        if campaign is None:
+            return "RUN ENDED"
+        if campaign.phase is CampaignPhase.COMPLETED:
+            if campaign.stage_count == 1:
+                return "STAGE CLEARED"
+            return f"ALL {campaign.stage_count} STAGES CLEARED"
+        return f"STAGE {campaign.stage_number} OF {campaign.stage_count}"
+
+    @property
+    def interstitial_labels(self) -> tuple[str, ...]:
+        """The interstitial menu, in display order and in the words of what it does."""
+        tail = RUN_OVER_LABELS[RunOverItem.QUIT_TO_MENU]
+        if self.campaign is None:
+            return (RUN_OVER_LABELS[RunOverItem.RETRY], tail)
+        return (INTERSTITIAL_PRIMARY_LABELS[self.campaign.phase], tail)
+
+    @property
+    def interstitial_is_failure(self) -> bool:
+        """Whether the interstitial reports a loss, so colour is not the only signal."""
+        if self.outcome is not None:
+            return True
+        return self.campaign is not None and self.campaign.phase is CampaignPhase.FAILED
 
     # -- transitions -----------------------------------------------------------
 
@@ -220,12 +326,14 @@ class ClientShell:
         self.running = False
 
     def open_session(self, session: StageSession) -> None:
-        """Adopt ``session`` as the current run and show the screen it belongs on.
+        """Adopt ``session`` as a campaign-less run and show the screen it belongs on.
 
         A session that already carries an outcome opens on the terminal screen. That is
         how a presentation test drives a terminal screen: it assembles the finished state
         itself. Nothing in the client sets an outcome.
         """
+        self.campaign = None
+        self._drop_online()
         self.session = session
         self.pause_cause = None
         self.notice = ""
@@ -235,13 +343,43 @@ class ClientShell:
         else:
             self.screen = Screen.PLAYING
 
+    def open_campaign(self, campaign: CampaignRun) -> None:
+        """Adopt ``campaign`` and show the screen its phase belongs on.
+
+        :attr:`session` is set from the campaign here and in :meth:`advance`, and nowhere
+        else, so the two can never describe different runs.
+        """
+        self.campaign = campaign
+        self._drop_online()
+        self.session = campaign.session
+        self.pause_cause = None
+        self.notice = ""
+        if campaign.phase is CampaignPhase.PLAYING:
+            self.screen = Screen.PLAYING
+        else:
+            self.run_over_index = 0
+            self.screen = Screen.RUN_OVER
+
     def start_selected_stage(self) -> bool:
-        """Start the highlighted stage. Returns whether a run began."""
-        entry = self.selected_entry
-        if entry is None:
+        """Start the campaign at the highlighted stage. Returns whether a run began.
+
+        Starting part-way through is the checkpoint policy, not a debug affordance: there
+        is no saved progress to resume from, so a player picks up where they choose, with
+        the campaign's starting lives and a score of zero.
+        """
+        if self.selected_entry is None:
             self.notice = EMPTY_CATALOG_NOTICE
             return False
-        self.open_session(StageSession.start(entry.stage, seed=self.seed, rules=self.rules))
+        self.open_campaign(
+            CampaignRun.start(
+                campaign_plan(self.catalog, self.campaign_rules),
+                seed=self.seed,
+                rules=self.campaign_rules,
+                sim_rules=self.rules,
+                driver=self.driver,
+                stage_index=self.stage_index,
+            )
+        )
         return True
 
     def open_online(self) -> bool:
@@ -254,6 +392,7 @@ class ClientShell:
             self.notice = NO_SERVER_NOTICE
             return False
         self.session = None
+        self.campaign = None
         self.pause_cause = None
         self.notice = ""
         session = self.online_config.session()
@@ -302,14 +441,25 @@ class ClientShell:
 
     def leave_online(self) -> None:
         """Give up the seat, say so if the session is still live, and go back."""
+        self._drop_online()
+        self.screen = Screen.MAIN_MENU
+        self.notice = ""
+
+    def _drop_online(self) -> None:
+        """Forget the online session, saying goodbye first if the seat is still live.
+
+        A local run and an online one are mutually exclusive: there is one board, one
+        intent stream and one screen, and a lingering session would keep offering input
+        for a match this client had walked away from. Starting a campaign therefore drops
+        the online session exactly as leaving the lobby does, and both go through here so
+        the departure message is never skipped.
+        """
         session = self.online
         if session is not None:
             leaving = session.leave_message()
             if leaving is not None:
                 self.outbox.append(leaving)
         self.online = None
-        self.screen = Screen.MAIN_MENU
-        self.notice = ""
 
     def set_focused(self, focused: bool) -> None:
         """Record window focus, pausing a live *local* run when focus is lost.
@@ -324,8 +474,30 @@ class ClientShell:
             self._pause(PauseCause.FOCUS_LOSS)
 
     def advance(self, ticks: int, intent: PlayerIntent = IDLE_INTENT) -> None:
-        """Advance the run by ``ticks``, then show a terminal screen if it ended."""
+        """Advance the run by ``ticks``, then show the interstitial if it stopped.
+
+        A campaign stops for three reasons and a campaign-less session for one. Both leave
+        the playing screen the same way: from inside this method, with no key press behind
+        the transition, which is why :meth:`ClientApp.advance_frame` tidies up held input
+        afterwards.
+
+        :attr:`session` is writable and a caller may have replaced it since the last tick,
+        so a campaign adopts whatever is there before it runs any -- including when
+        ``ticks`` is zero, which is an ordinary frame at a display faster than the tick
+        rate. A state written from outside therefore reaches the screen on the next frame
+        whether or not that frame bought a tick, and the campaign and the shell can never
+        describe different runs.
+        """
         if not self.consumes_ticks or self.session is None:
+            return
+        campaign = self.campaign
+        if campaign is not None:
+            campaign = campaign.with_session(self.session)
+            self.campaign = campaign.advance(ticks, intent)
+            self.session = self.campaign.session
+            if self.campaign.phase is not CampaignPhase.PLAYING:
+                self.run_over_index = 0
+                self.screen = Screen.RUN_OVER
             return
         self.session = self.session.advance(ticks, intent)
         if self.session.finished:
@@ -433,7 +605,7 @@ class ClientShell:
                 self._return_to_main_menu()
             case Action.UI_CONFIRM:
                 if self.run_over_item is RunOverItem.RETRY:
-                    self._restart_session()
+                    self._continue_from_interstitial()
                 else:
                     self._return_to_main_menu()
             case _:
@@ -496,6 +668,22 @@ class ClientShell:
         index = offered.index(current) if current in offered else -1
         return offered[(index + 1) % len(offered)]
 
+    def _continue_from_interstitial(self) -> None:
+        """What the first interstitial entry does, which depends on why the run stopped."""
+        campaign = self.campaign
+        if campaign is None:
+            self._restart_session()
+            return
+        match campaign.phase:
+            case CampaignPhase.STAGE_CLEARED:
+                self.open_campaign(campaign.advanced_stage())
+            case CampaignPhase.COMPLETED | CampaignPhase.FAILED:
+                self.open_campaign(campaign.restarted())
+            case CampaignPhase.PLAYING:
+                # Not reachable through the loop: the interstitial is only shown for a
+                # phase that stopped. Resuming is still the honest answer to "continue".
+                self.open_campaign(campaign)
+
     # -- shared transitions ----------------------------------------------------
 
     def resume(self) -> None:
@@ -513,6 +701,11 @@ class ClientShell:
         self.screen = Screen.PAUSED
 
     def _restart_session(self) -> None:
+        """Replay the current stage. In a campaign that rewinds the score with it."""
+        campaign = self.campaign
+        if campaign is not None:
+            self.open_campaign(campaign.restarted_stage())
+            return
         if self.session is None:
             self._return_to_main_menu()
             return
@@ -520,6 +713,7 @@ class ClientShell:
 
     def _return_to_main_menu(self) -> None:
         self.session = None
-        self.online = None
+        self._drop_online()
+        self.campaign = None
         self.pause_cause = None
         self.screen = Screen.MAIN_MENU
