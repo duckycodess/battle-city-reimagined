@@ -49,6 +49,18 @@ alone — never in the broadcast roster — and then every later message from th
 connection is the game session's business. There is no reconnect and no host migration:
 a host that leaves ends the lobby, and a player that drops after start loses the slot,
 exactly as before.
+
+Recording and watching are arranged before the match, and carried across
+---------------------------------------------------------------------
+A recording has to begin at tick zero, and a watcher that turns up after the handover
+has missed the start of the run, so both are arranged on the lobby and handed over with
+everything else. :meth:`MatchSession.record_replay` is an explicit opt-in — nothing is
+recorded unless a deployment asks — and it is what puts the *agreed* settings, mode and
+cheat flag into the replay's metadata, which is the product specification's requirement
+that competitive configuration be recorded where the run is. Observers registered before
+the start are attached to the session the moment it exists; afterwards they are passed
+straight through. Neither is a player, neither holds a credential, and neither can say
+anything: see :mod:`battle_city_server.spectator`.
 """
 
 from __future__ import annotations
@@ -62,6 +74,7 @@ from typing import Final
 from battle_city_protocol import (
     MAX_LEVELS_PER_LOBBY,
     MAX_LOBBY_MEMBERS,
+    MAX_REPLAY_TICKS,
     MAX_TICK_RATE,
     TEAM_MODES,
     ClientMessage,
@@ -83,6 +96,7 @@ from battle_city_protocol import (
     MessageError,
     Rejected,
     RejectionCode,
+    ReplayError,
     SessionClosed,
     StateSnapshot,
 )
@@ -99,7 +113,14 @@ from .config import (
 )
 from .content import rules_digest
 from .logs import content_label, log_event, session_logger
+from .replay import (
+    DEFAULT_HASH_INTERVAL,
+    ReplayRecorder,
+    check_recording_bounds,
+    replay_metadata,
+)
 from .session import GameSession, Reply
+from .spectator import ObserverRefusedError, SessionObserver, TooManyObserversError
 
 PLAYABLE_MODES: Final[frozenset[MatchMode]] = frozenset({MatchMode.COOP})
 """The modes this build will actually start.
@@ -730,6 +751,10 @@ class MatchSession:
         self._connections: set[int] = set()
         self._next_connection = 1
         self._closed = False
+        self._recording: tuple[int, int] | None = None
+        self._recorder: ReplayRecorder | None = None
+        self._recording_notice = ""
+        self._pending_observers: list[SessionObserver] = []
 
     # -- the authority surface -------------------------------------------------
 
@@ -785,6 +810,89 @@ class MatchSession:
     def game(self) -> GameSession | None:
         """The game session, once one has started."""
         return self._game
+
+    # -- recording and watching, arranged before the match ---------------------
+
+    def record_replay(
+        self,
+        *,
+        hash_interval: int = DEFAULT_HASH_INTERVAL,
+        max_ticks: int = MAX_REPLAY_TICKS,
+    ) -> None:
+        """Record the match this lobby starts. Opt-in, and only before the handover.
+
+        Nothing is recorded unless a deployment calls this, because a recording is a
+        document about the people playing and keeping one is their deployment's decision
+        rather than a default. The bounds are checked here rather than at the handover,
+        where a refusal would mean either failing a match everyone agreed to or silently
+        dropping the recording.
+        """
+        if self._game is not None:
+            raise ValueError("a recording must be arranged before the match starts")
+        if self._recording is not None:
+            raise ValueError("this lobby is already recording its match")
+        check_recording_bounds(hash_interval, max_ticks)
+        self._recording = (hash_interval, max_ticks)
+
+    @property
+    def recording(self) -> bool:
+        """Whether the match this lobby starts will be recorded."""
+        return self._recording is not None
+
+    @property
+    def recorder(self) -> ReplayRecorder | None:
+        """The recording of the started match, or ``None`` while there is none."""
+        return self._recorder
+
+    @property
+    def recording_notice(self) -> str:
+        """Why a requested recording did not start, or ``""``.
+
+        A recording that cannot be described is dropped rather than allowed to fail the
+        handover: the match was agreed by people who are waiting for it, and the
+        recording is the part of this that nobody consented to losing a game over. The
+        reason is kept here and logged rather than swallowed.
+        """
+        return self._recording_notice
+
+    def add_observer(self, observer: SessionObserver) -> None:
+        """Watch this match, from before it starts or from the middle of it.
+
+        Before the handover the observer is held — there is no session for it to watch
+        yet and no snapshot to open it with — and attached the moment one exists, so it
+        sees the run from tick zero. Afterwards it goes straight to the session. The
+        bound is the session's own observer limit either way, so holding observers
+        before the start cannot buy a deployment more of them than running does.
+        """
+        if self.closed:
+            raise ObserverRefusedError("this lobby is closed")
+        if self._game is not None:
+            self._game.add_observer(observer)
+            return
+        if any(existing is observer for existing in self._pending_observers):
+            raise TooManyObserversError("that observer is already registered")
+        if len(self._pending_observers) >= self._config.limits.max_observers:
+            raise TooManyObserversError(
+                f"this session holds at most {self._config.limits.max_observers} observers"
+            )
+        self._pending_observers.append(observer)
+
+    def remove_observer(self, observer: SessionObserver) -> None:
+        """Stop delivering to ``observer``, whichever phase is holding it."""
+        self._pending_observers = [
+            existing for existing in self._pending_observers if existing is not observer
+        ]
+        if self._game is not None:
+            self._game.remove_observer(observer)
+
+    @property
+    def observers(self) -> tuple[SessionObserver, ...]:
+        """The observers this match is delivering to, or will. For diagnostics."""
+        if self._game is not None:
+            return self._game.observers
+        return tuple(self._pending_observers)
+
+    # -- the authority surface, continued --------------------------------------
 
     def connect(self, identifier: int | None = None) -> int:
         connection = self._next_connection if identifier is None else identifier
@@ -895,9 +1003,13 @@ class MatchSession:
         except ServerConfigurationError as error:
             return self._lobby.close(RejectionCode.STAGE_UNSUPPORTED, str(error))
         game = GameSession(config)
+        self._attach_recorder(game, config, settings)
         for connection in sorted(self._connections):
             game.connect(connection)
         self._game = game
+        for observer in self._pending_observers:
+            game.add_observer(observer)
+        self._pending_observers = []
 
         replies: list[Reply] = []
         for credential in config.credentials:
@@ -917,6 +1029,40 @@ class MatchSession:
                 )
             )
         return tuple(replies)
+
+    def _attach_recorder(
+        self, game: GameSession, config: SessionConfig, settings: MatchSettings
+    ) -> None:
+        """Start the recording this lobby was asked for, if it was asked for one.
+
+        The agreed settings go in, so the document records the mode and the cheat flag
+        the roster consented to rather than leaving a reader to guess them. The
+        credentials ``config`` carries do not: ``replay_metadata`` reads the slot numbers
+        and nothing else out of them.
+        """
+        if self._recording is None:
+            return
+        hash_interval, max_ticks = self._recording
+        try:
+            recorder = ReplayRecorder(
+                replay_metadata(config, hash_interval=hash_interval, settings=settings),
+                max_ticks=max_ticks,
+            )
+            game.attach_recorder(recorder)
+        except (ReplayError, ValueError) as error:
+            self._recording_notice = f"recording dropped: {type(error).__name__}"
+            log_event(
+                session_logger(),
+                "recording_dropped",
+                session_id=self._config.session_id,
+                tick=0,
+                content=content_label(self._lobby.level.content),
+                rules_digest=rules_digest(self._config.rules),
+                detail=self._recording_notice,
+                level=logging.WARNING,
+            )
+            return
+        self._recorder = recorder
 
 
 def _pack_mismatch(claimed: ContentRef, expected: ContentRef) -> str | None:

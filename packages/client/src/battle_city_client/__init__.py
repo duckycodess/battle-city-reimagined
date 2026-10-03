@@ -71,6 +71,7 @@ Layout
 ``persistence``    versioned local settings and campaign progress, and their recovery
 ``online``         one hosted match from the client's side: lobby, handover, remote run
 ``remote``         a server snapshot read into something the renderer can draw
+``spectator``      a read-only window onto a session: frames in, nothing out
 ``netlink``        the transport the online session is pumped through (no pygame)
 ``shell``          the screen state machine, testable without a window
 ``keymap``         keycode tables, split by screen
@@ -105,11 +106,13 @@ from .persistence import (
     LocalProfile,
     LocalSettings,
     ProfileStore,
+    ReplayLibrary,
     StageCheckpoint,
 )
 from .remote import RemoteBoard, RemoteStateError, board_from_snapshot, terrain_from_rows
 from .session import DEFAULT_SEED, StageSession
 from .shell import ClientShell, PauseCause, Screen
+from .spectator import SpectatorView
 from .stage_adapter import (
     StageAdapterError,
     StageEntry,
@@ -168,12 +171,9 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "BADGES",
-    "DEFAULT_CAMPAIGN_RULES",
-    "DEFAULT_SEED",
-    "NOMINAL_TICK_RATE",
     "Action",
     "AssetLibrary",
+    "BADGES",
     "Badge",
     "CampaignPhase",
     "CampaignProgress",
@@ -181,6 +181,8 @@ __all__ = [
     "CampaignRun",
     "ClientApp",
     "ClientShell",
+    "DEFAULT_CAMPAIGN_RULES",
+    "DEFAULT_SEED",
     "EnemyCommandDriver",
     "FixedTickAccumulator",
     "HeldActions",
@@ -188,6 +190,7 @@ __all__ = [
     "LobbyView",
     "LocalProfile",
     "LocalSettings",
+    "NOMINAL_TICK_RATE",
     "NetworkLink",
     "OnlineConfig",
     "OnlinePhase",
@@ -200,7 +203,9 @@ __all__ = [
     "RemoteBoard",
     "RemoteStateError",
     "Renderer",
+    "ReplayLibrary",
     "Screen",
+    "SpectatorView",
     "StageAdapterError",
     "StageCheckpoint",
     "StageEntry",

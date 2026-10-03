@@ -24,6 +24,10 @@ Layers
   as the game session is.
 * :mod:`battle_city_server.authority` is the seam the asyncio shell talks through, so
   neither phase is special to it.
+* :mod:`battle_city_server.spectator` is the output-only seam a watcher registers on,
+  and :mod:`battle_city_server.replay` records a run's applied tick inputs and replays
+  one to prove it reproduces. Neither can submit input, hold a slot or carry a
+  credential, and both are in-process in this release.
 
 Guarantees
 ----------
@@ -79,8 +83,37 @@ from .lobby import (
 )
 from .logs import FIELD_ORDER, LOGGER_NAME, content_label, log_event, session_logger
 from .loopback import LoopbackStream, loopback_pair
+from .replay import (
+    CHECKPOINT_RESERVE_BYTES,
+    DEFAULT_HASH_INTERVAL,
+    WIRE_FACINGS,
+    ReplayContext,
+    ReplayIncompatibleError,
+    ReplayMismatch,
+    ReplayPlayback,
+    ReplayPlaybackError,
+    ReplayRecorder,
+    ReplayUnplayableError,
+    TickRecorder,
+    check_recording_bounds,
+    effective_seed,
+    play_replay,
+    replay_command,
+    replay_commands,
+    replay_metadata,
+    required_checkpoints,
+    simulation_command,
+    simulation_commands,
+)
 from .server import DEFAULT_FLUSH_TIMEOUT, FATAL_FRAME_CODES, SessionServer
 from .session import GameSession, Reply
+from .spectator import (
+    DEFAULT_MAX_OBSERVERS,
+    ObserverRefusedError,
+    ObserverRegistry,
+    SessionObserver,
+    TooManyObserversError,
+)
 from .tcp import TcpStream, serve_tcp
 from .translation import (
     IllegalActionError,
@@ -93,9 +126,12 @@ from .translation import (
 )
 
 __all__ = [
+    "CHECKPOINT_RESERVE_BYTES",
     "DEFAULT_FLUSH_TIMEOUT",
+    "DEFAULT_HASH_INTERVAL",
     "DEFAULT_LIMITS",
     "DEFAULT_MAX_CATCHUP_TICKS",
+    "DEFAULT_MAX_OBSERVERS",
     "DEFAULT_TICK_RATE",
     "FATAL_FRAME_CODES",
     "FIELD_ORDER",
@@ -111,29 +147,51 @@ __all__ = [
     "ManualClock",
     "MatchSession",
     "OFFERED_MODES",
+    "ObserverRefusedError",
+    "ObserverRegistry",
     "PLAYABLE_MODES",
     "PlayerCredential",
     "RealTimeClock",
+    "ReplayContext",
+    "ReplayIncompatibleError",
+    "ReplayMismatch",
+    "ReplayPlayback",
+    "ReplayPlaybackError",
+    "ReplayRecorder",
+    "ReplayUnplayableError",
     "Reply",
     "ServerConfigurationError",
     "SessionAuthority",
     "SessionConfig",
     "SessionLimits",
+    "SessionObserver",
     "SessionServer",
     "TcpStream",
     "TickClock",
+    "TickRecorder",
+    "TooManyObserversError",
     "UntranslatableEventError",
+    "WIRE_FACINGS",
+    "check_recording_bounds",
     "commands_for",
     "content_label",
     "content_ref_for",
+    "effective_seed",
     "grid_rows",
     "log_event",
     "loopback_pair",
+    "play_replay",
     "protocol_event",
     "protocol_events",
+    "replay_command",
+    "replay_commands",
+    "replay_metadata",
+    "required_checkpoints",
     "rules_digest",
     "serve_tcp",
     "session_logger",
+    "simulation_command",
+    "simulation_commands",
     "snapshot_of",
     "stage_from_level",
 ]

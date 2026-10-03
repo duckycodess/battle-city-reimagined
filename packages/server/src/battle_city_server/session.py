@@ -24,6 +24,15 @@ duplicate, such as a respawn cell that another tank is standing on — the tick 
 empty and the contributing slots are told. Either way the tick advances. A session that
 could be frozen by one malformed intent would be a denial of service with extra steps.
 
+Watching is not playing
+-----------------------
+A session delivers its authoritative output to registered in-process observers as well
+as to its connections, and records the tick input it applied to a registered recorder.
+Both seams are output only: see :mod:`battle_city_server.spectator` and
+:mod:`battle_city_server.replay`. An observer takes no slot, holds no credential and has
+no method through which it could submit input, and one that raises is dropped rather
+than being allowed to interrupt the tick every player is owed.
+
 What a client cannot do
 -----------------------
 Nothing here reads a score, a seed, a tile or an entity position from a message. A
@@ -71,6 +80,8 @@ from battle_city_sim import (
 from .config import SessionConfig, SessionLimits
 from .content import rules_digest
 from .logs import content_label, log_event, session_logger
+from .replay import TickRecorder
+from .spectator import ObserverRefusedError, ObserverRegistry, SessionObserver
 from .translation import IllegalActionError, commands_for, protocol_events, snapshot_of
 
 _DUMMY_TOKEN: str = "0" * 32
@@ -133,6 +144,10 @@ class GameSession:
         self._closed = False
         self._server_commands: dict[int, list[Command]] = {}
         self._log = session_logger()
+        self._observers = ObserverRegistry(
+            config.limits.max_observers, report=self._report_observer
+        )
+        self._recorder: TickRecorder | None = None
         self._info = SessionInfo(
             tick_rate=config.tick_rate,
             keyframe_interval=config.limits.keyframe_interval,
@@ -225,6 +240,57 @@ class GameSession:
             )
         self._server_commands.setdefault(tick, []).extend(commands)
 
+    def add_observer(self, observer: SessionObserver) -> None:
+        """Register an in-process spectator and hand it a keyframe of the state now.
+
+        An observer is not a connection: it gets no slot, no credential and no way to
+        say anything. See :mod:`battle_city_server.spectator` for why the seam is shaped
+        that way and why no spectator arrives over a socket in this release.
+
+        Refused once the session is over: a watcher registered then would be handed an
+        opening keyframe of a run that has already ended and would never be told it
+        ended, because the closing notice has been and gone.
+        """
+        if self._closed:
+            raise ObserverRefusedError("this session is closed")
+        self._observers.add(observer)
+        self._observers.opened(observer, self._info, self.snapshot(keyframe=True))
+
+    def remove_observer(self, observer: SessionObserver) -> None:
+        """Stop delivering to ``observer``. Removing an unregistered one is not an error."""
+        self._observers.remove(observer)
+
+    @property
+    def observers(self) -> tuple[SessionObserver, ...]:
+        """The registered observers, in delivery order. For diagnostics."""
+        return self._observers.observers
+
+    def attach_recorder(self, recorder: TickRecorder) -> None:
+        """Record this run's applied tick inputs into ``recorder``.
+
+        Refused once the run has started, because a recording that begins at tick five
+        cannot be replayed from a tick-zero state and would be a document that looks
+        complete and is not. One recorder per session: a second one would record the
+        same stream twice and the session would have to decide whose bound ends it.
+        """
+        if self._closed:
+            raise ValueError("this session is closed")
+        if self._recorder is not None:
+            raise ValueError("this session already has a recorder")
+        if self._state.tick != 0:
+            raise ValueError(f"a recording must start at tick 0, not tick {self._state.tick}")
+        recorder.opened(self._state)
+        self._recorder = recorder
+
+    @property
+    def recorder(self) -> TickRecorder | None:
+        """The attached recorder, if there is one."""
+        return self._recorder
+
+    def _report_observer(self, detail: str) -> None:
+        """Record that an observer was dropped. Never names the observer."""
+        self._log_event("observer_dropped", detail=detail, level=logging.WARNING)
+
     def connect(self, identifier: int | None = None) -> int:
         """Register a connection that has not joined yet and return its identifier.
 
@@ -285,6 +351,7 @@ class GameSession:
         self._closed = True
         self._log_event("session_closed", reason=code, detail=_short(detail) or None)
         message = self.closing_notice(code, detail)
+        self._observers.closed(message)
         return tuple(
             Reply(connection=connection, message=message, close=True)
             for connection in sorted(self._connections)
@@ -323,9 +390,27 @@ class GameSession:
             # client whose input was in the refused batch is told so.
             for member, batch in contributors:
                 replies.extend(self._reject(member, batch, str(error)))
-            result = step(self._state, TickInput(tick=tick), self._config.rules)
+            tick_input = TickInput(tick=tick)
+            result = step(self._state, tick_input, self._config.rules)
 
         self._state = result.state
+        if self._recorder is not None:
+            # The input that was *applied*, which is the empty one when the tick had to
+            # be run empty. A recording of what was asked for would not replay.
+            #
+            # A recorder that fails is detached and reported, like an observer that
+            # raises: the tick is already decided and every player is already owed it,
+            # so a recording cannot be allowed to end the run it is recording.
+            recorder = self._recorder
+            try:
+                recorder.recorded(tick_input, self._state)
+            except Exception as error:  # a recorder must not be able to break the tick
+                self._recorder = None
+                self._log_event(
+                    "recorder_dropped",
+                    detail=f"recorder dropped after {type(error).__name__}",
+                    level=logging.WARNING,
+                )
         replies.extend(self._broadcast_tick(result.events))
         if self._state.finished:
             replies.extend(self.close(RejectionCode.SESSION_CLOSED, "run finished"))
@@ -550,20 +635,23 @@ class GameSession:
         keyframe = self._state.tick % self._config.limits.keyframe_interval == 0
         snapshot = self.snapshot(keyframe=keyframe)
         translated = protocol_events(events)
+        tick_events = (
+            TickEvents(
+                session_id=self._config.session_id,
+                tick=self._state.tick,
+                events=translated,
+            )
+            if translated
+            else None
+        )
         replies: list[Reply] = []
         for connection in sorted(self._connection_slot):
             replies.append(Reply(connection=connection, message=snapshot))
-            if translated:
-                replies.append(
-                    Reply(
-                        connection=connection,
-                        message=TickEvents(
-                            session_id=self._config.session_id,
-                            tick=self._state.tick,
-                            events=translated,
-                        ),
-                    )
-                )
+            if tick_events is not None:
+                replies.append(Reply(connection=connection, message=tick_events))
+        # Spectators are handed the same two values the players are, and are handed them
+        # after the tick is decided: watching cannot change what happened.
+        self._observers.observed(snapshot, tick_events)
         return tuple(replies)
 
     def _reject(self, member: _Member, batch: _Batch, detail: str) -> tuple[Reply, ...]:

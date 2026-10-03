@@ -347,8 +347,8 @@ def _write_new_file(path: Path, payload: bytes) -> None:
     _sync_directory(path.parent)
 
 
-def _read_bounded(path: Path) -> bytes:
-    """Read at most :data:`MAX_DOCUMENT_BYTES` + 1 bytes of ``path``.
+def _read_bounded(path: Path, limit: int = MAX_DOCUMENT_BYTES) -> bytes:
+    """Read at most ``limit`` + 1 bytes of ``path``.
 
     The extra byte is the whole trick: a read that comes back longer than the limit
     proves the file is over it without the file having been read. A profile document is
@@ -356,12 +356,17 @@ def _read_bounded(path: Path) -> bytes:
     a save directory aimed at something enormous -- by a mistake, a symlink or a
     deliberate attempt -- costs one page of memory to refuse instead of its whole length.
 
+    ``limit`` defaults to the profile document bound. A replay is a much larger document
+    with a bound of its own, and
+    :mod:`~battle_city_client.persistence.replays` reads through here with that bound
+    rather than through a second copy of this trick.
+
     :class:`FileNotFoundError` and every other :class:`OSError` are left to the caller,
     which tells "there is no file yet" from "this file cannot be read" and says something
     different about each.
     """
     with path.open("rb") as handle:
-        return handle.read(MAX_DOCUMENT_BYTES + 1)
+        return handle.read(limit + 1)
 
 
 def _write_atomically(path: Path, payload: bytes) -> None:
