@@ -14,6 +14,8 @@ Every message includes protocol version, message type, session identifier, and b
 
 Validate message size, shape, enum values, rates, sequence, player ownership, session membership, and content/version compatibility before mutation. Reject invalid data with stable reason codes and no partial state change. Never deserialize executable objects.
 
+For the opt-in v2 gimmick terrain, `ContentRef.content_schema_version` identifies compatibility. Protocol version 2, snapshot version 1 and classic v1 wire encoding remain unchanged. A v1 session must reject a v2 content reference or v2 terrain rows, not reinterpret them as v1. The authoritative server translates explicit row codes, applies conveyor pushes and paired-pad outcomes, and sends resulting positions and keyframe terrain; clients submit only intents. Validate terrain rows in context of the agreed content version before using them. An unsupported content version returns the existing actionable content mismatch rather than partial start.
+
 ## Session behavior
 
 Plan for lobby creation/join, ready state, mode selection, stage/content agreement, start, disconnect, reconnect, session end, and result recording. Reconnection and host migration are separate proposals; the first release may end a session when its authoritative server is lost.

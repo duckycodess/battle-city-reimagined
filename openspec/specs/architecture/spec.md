@@ -25,6 +25,8 @@ The simulation is a pure state transition over immutable or explicitly owned sta
 
 Stable IDs and explicit ordering govern entities and collision resolution. A canonical state encoding and hash support determinism checks, replay comparisons, server diagnostics, and future reconciliation. Changes to canonical serialization need a proposal and replay-compatibility policy.
 
+The opt-in `gimmicks-v1` v2 terrain uses newly appended tile codes in the unchanged canonical version-1 state layout. Identical classic state and inputs retain identical bytes and hashes. Pairing is derived from the validated grid (zero or exactly two pads); no cooldown or mutable pad state is serialized. Session/match content references identify v1 versus v2 for consumers, and existing protocol/snapshot version numbers remain unchanged. Reproducible fixed-tick sequences, not a new replay file format, establish replay compatibility for this slice.
+
 ## Client
 
 Pygame-CE handles windows, input devices, rendering, audio, menus, and visual interpolation. It translates local controls into tick-indexed intents and renders simulation snapshots. It cannot own authoritative rules or silently modify server-owned results.
