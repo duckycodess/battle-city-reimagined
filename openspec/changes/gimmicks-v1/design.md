@@ -23,3 +23,52 @@ Keep existing PROTOCOL_VERSION=2, SNAPSHOT_VERSION=1 and CANONICAL_STATE_VERSION
 ## D5 — Rejected alternatives, risks and verification (R7)
 
 Do not require whole-body tile containment, add cooldown state, clamp pad offsets, invent pair IDs, teleport projectiles, add global AI path planner, bump wire/snapshot/canonical versions or alter campaign/co-op/competitive rules. Adjacent pads may trap a repeatedly crossing tank; blocked exits and conveyor congestion affect balance; explicitly state these limitations in PR. Run dependency sync, locked pytest (original issue ordering, recording known #22 import-order baseline failure if present), comparable reordered pytest with sim last, locked mypy, and make ci. No edits to tests/sim/test_purity.py or out-of-scope fixtures to hide pre-existing failures. Capture real gameplay and editor screenshots and require independent exact-pushed-head verdict before ready_to_merge.
+
+## D6 — Decisions the design left open, as implemented
+
+Recorded after implementation so the accepted change and the shipped behaviour agree.
+
+**Row alphabet (D1).** `Tile` gains `CONVEYOR_N/E/S/W` and `TELEPORT_PAD` as values 9-13,
+and `TILE_CODE_CHARS` maps every tile to its one row character. `CONVEYOR_E` is value 10,
+so `str(tile.value)` would have written two columns; `TileGrid.to_rows` and the server's
+`grid_rows` go through the table instead. The editor's `TILE_ART` joins the two
+vocabularies on the character rather than on `Tile(int(code.value))`, which would raise on
+four of the five new codes.
+
+**Schema file name (D1).** `classic-level.v2.schema.json`, the name the version 1 schema's
+own description already promised a later grid format would take. The pack manifest format
+is unchanged: a v2 pack is an ordinary manifest whose `content_schema_version` is 2.
+
+**Player reachability (D1).** A bounded launch option was feasible, so it exists: the
+client's `--pack` takes a pack manifest path or a bundled pack identifier, and
+`resolve_pack`/`pack_stage_catalog` are the same path from the catalog API. The default
+menu is still the three classic stages. The sample is `packs/gimmick-demo.json`, loaded by
+`load_gimmick_demo_pack` or `--pack gimmick-demo`.
+
+**Edge pushes (D2).** A displacement that moves nothing is a refusal, matching a commanded
+step clamped at the world edge, so a belt running into the edge emits `TankMoveBlocked`
+rather than a `TankMoved` to where the tank already stands.
+
+**AI clearance (D3).** `clearance_ticks` counts ticks that make progress *along* the asked
+direction instead of ticks that move the tank at all. A tank whose step is refused by a
+wall while a belt shoves it the other way has moved, and counting that as clearance would
+commit a plan to a direction the bot is being carried away from. The two readings are the
+same measurement on a grid without gimmick terrain, where the commanded step is the only
+displacement there is, which is what keeps classic decisions byte-identical.
+
+**Editor keys (D3).** `9` takes the free digit. `A` to `D` are click-only: `B` and `E` are
+already the paint and enemy-spawn tools. The palette moved to five narrower columns so
+fourteen swatches fit beside the readings without changing the editor frame size, and the
+panel gained a pad count and the schema version a save would declare.
+
+**Version gate placement (D4).** The server checks once, while a session is described,
+because no tick can turn classic terrain into gimmick terrain; the client checks once per
+keyframe, where the agreed `ContentRef` is known. `protocol.messages._require_grid` is
+untouched and stays version-blind.
+
+**Verification caveat (D5).** The six committed client captures under
+`tests/client/screenshots/` were already stale against UI work that landed before this
+change — regenerating them from a pristine `fd8355b` worktree produces the same six
+differences — so they are left as they were and the staleness is a follow-up for whoever
+owns that UI work. The three gimmick captures added here are fresh, and the classic six
+are byte-identical between that baseline and this implementation.
