@@ -10,9 +10,25 @@ is then moved onto the target with :func:`os.replace`, which is atomic on every 
 this game runs on. A reader therefore sees the whole old file or the whole new one and
 never a half-written document, whatever the process does in between. The directory is
 ``fsync``-ed afterwards so the rename itself survives a power loss, and a write that fails
-part-way removes its temporary file and leaves the target exactly as it was. A leftover
-temporary from a kill that beat the cleanup is inert: nothing reads it, and the next write
-replaces it.
+part-way removes its own temporary file and leaves the target exactly as it was.
+
+Each temporary is created exclusively, under a unique name, by :func:`tempfile.mkstemp`
+in the target's own directory. Two writers -- two windows of this game, or a launch racing
+a tool -- therefore stage into different files: a shared staging name would let one
+writer's bytes land in the other's rename, and would let either writer's failure delete
+the other's staged document. Cleanup is likewise confined to the temporary a call created
+itself. A temporary left behind by a process that was killed is inert -- nothing reads it,
+and the save it was staging never happened -- and it is deliberately *not* swept up here,
+because from the outside an abandoned temporary and a live one look the same.
+
+Reading one is bounded
+----------------------
+A document is read through a handle that stops at one byte past the size limit, so a file
+over the limit is refused on the strength of that byte rather than being read into memory
+to be measured. Nothing about a save directory is trusted: not the size of what is in it,
+not that the contents are a document, and not that the name points at an ordinary file.
+The rename replaces a *name*, so a symbolic link at the target is what gets replaced and
+this document's bytes cannot be steered elsewhere through one.
 
 Reading one back can fail in three ways, and they are not the same
 ------------------------------------------------------------------
@@ -53,6 +69,7 @@ at a temporary directory by handing the store a different locator.
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,7 +77,14 @@ from typing import Final
 
 from battle_city_protocol import JsonValue
 
-from .documents import CorruptSave, Document, FutureSchema, SaveError, decode_document
+from .documents import (
+    MAX_DOCUMENT_BYTES,
+    CorruptSave,
+    Document,
+    FutureSchema,
+    SaveError,
+    decode_document,
+)
 from .documents import encode_document as encode_save_document
 from .migrations import MigrationFailed, MigrationRegistry, MigrationTable, migrate
 from .progress import PROGRESS_KIND
@@ -71,6 +95,7 @@ SAVE_DIR_ENV: Final[str] = "BATTLE_CITY_SAVE_DIR"
 
 APPLICATION_DIRECTORY: Final[str] = "battle-city-reimagined"
 TEMP_SUFFIX: Final[str] = ".tmp"
+"""Ending of a staging file. The name in front of it is unique per writer, never fixed."""
 BACKUP_TEMPLATE: Final[str] = "{name}.v{version}.bak"
 MAX_BACKUPS: Final[int] = 9
 """How many backups one document may accumulate at a single schema version.
@@ -162,12 +187,20 @@ class ProfileStore:
         """Read the ``kind`` document, migrating it if it is older. Never raises."""
         path = self.path_for(kind)
         try:
-            payload = path.read_bytes()
+            payload = _read_bounded(path)
         except FileNotFoundError:
             return Loaded(value=None)
         except OSError:
             return Loaded(
                 value=None, notice=self._notice(kind, "COULD NOT BE READ"), writable=False
+            )
+
+        if len(payload) > MAX_DOCUMENT_BYTES:
+            # Refused on the strength of one byte past the limit. Whatever the rest of
+            # the file is, it never enters this process: a save directory somebody
+            # pointed at a disk image must not be read into memory to be rejected.
+            return Loaded(
+                value=None, notice=self._notice(kind, "IS TOO LARGE TO BE A SAVE"), writable=False
             )
 
         try:
@@ -314,12 +347,48 @@ def _write_new_file(path: Path, payload: bytes) -> None:
     _sync_directory(path.parent)
 
 
+def _read_bounded(path: Path) -> bytes:
+    """Read at most :data:`MAX_DOCUMENT_BYTES` + 1 bytes of ``path``.
+
+    The extra byte is the whole trick: a read that comes back longer than the limit
+    proves the file is over it without the file having been read. A profile document is
+    a few hundred bytes, so the limit is never reached by anything this game wrote, and
+    a save directory aimed at something enormous -- by a mistake, a symlink or a
+    deliberate attempt -- costs one page of memory to refuse instead of its whole length.
+
+    :class:`FileNotFoundError` and every other :class:`OSError` are left to the caller,
+    which tells "there is no file yet" from "this file cannot be read" and says something
+    different about each.
+    """
+    with path.open("rb") as handle:
+        return handle.read(MAX_DOCUMENT_BYTES + 1)
+
+
 def _write_atomically(path: Path, payload: bytes) -> None:
-    """Write ``payload`` to ``path`` through a temporary file and :func:`os.replace`."""
+    """Write ``payload`` to ``path`` through a private temporary and :func:`os.replace`.
+
+    The temporary is created by :func:`tempfile.mkstemp` in the target's own directory,
+    which means it is exclusive and unique: two writers -- two windows of this game, or a
+    launch racing a tool -- never share a staging file. A shared one would let the second
+    writer's bytes land in the first writer's rename, and would let either writer's
+    failure delete the other's staged document out from under it. Cleanup therefore
+    touches the temporary this call created and nothing else, including a temporary left
+    behind by a process that was killed: it is inert, nothing ever reads it, and removing
+    it from here would be guessing at whether somebody else is still writing it.
+
+    The rename is what makes the replacement atomic, and it replaces the *name*: if the
+    target is a symbolic link, the link is what is replaced, so a save directory cannot be
+    used to write this document's bytes anywhere else.
+
+    ``mkstemp`` creates the file readable and writable by its owner alone, and
+    :func:`os.replace` carries that mode onto the target. A local profile is one person's
+    file, so that is the mode it should have had all along.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + TEMP_SUFFIX)
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=TEMP_SUFFIX)
+    temporary = Path(name)
     try:
-        with temporary.open("wb") as handle:
+        with os.fdopen(descriptor, "wb") as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from battle_city_client.persistence import (
+    MAX_DOCUMENT_BYTES,
     SAVE_DIR_ENV,
     SETTINGS_KIND,
     SETTINGS_SCHEMA_VERSION,
@@ -143,19 +144,75 @@ def test_a_structurally_valid_file_with_an_unusable_value_is_a_recovery_case(
     assert path.read_bytes() == original
 
 
-def test_an_unreadable_file_does_not_raise_into_the_launch(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _write(tmp_path / "settings.json", LocalSettings().to_data())
-
-    def refuse(self: Path, *args: object, **kwargs: object) -> bytes:
-        raise PermissionError("nope")
-
-    monkeypatch.setattr(Path, "read_bytes", refuse)
+def test_an_unreadable_file_does_not_raise_into_the_launch(tmp_path: Path) -> None:
+    """Something is at the document's name and it cannot be opened. Say so, keep going."""
+    (tmp_path / "settings.json").mkdir()
     loaded = _load(_store(tmp_path))
     assert loaded.value is None
     assert "COULD NOT BE READ" in loaded.notice
     assert not loaded.writable
+
+
+def test_a_file_over_the_limit_is_refused_without_being_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A save directory aimed at something enormous costs a page to refuse, not its length.
+
+    The spy is the proof: :meth:`Path.read_bytes` is the unbounded reader, and a load that
+    never calls it never had the whole file in memory to begin with.
+    """
+    path = tmp_path / "settings.json"
+    huge = b"x" * (MAX_DOCUMENT_BYTES * 128)
+    path.write_bytes(huge)
+
+    def forbidden(self: Path, *args: object, **kwargs: object) -> bytes:
+        raise AssertionError("the whole file was read")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    loaded = _load(_store(tmp_path))
+
+    assert loaded.value is None
+    assert "TOO LARGE" in loaded.notice
+    assert not loaded.writable
+    monkeypatch.undo()
+    assert path.read_bytes() == huge
+
+
+def test_the_bounded_reader_stops_one_byte_past_the_limit(tmp_path: Path) -> None:
+    """The one byte is what makes "over the limit" decidable without reading the rest."""
+    path = tmp_path / "settings.json"
+    path.write_bytes(b"x" * (MAX_DOCUMENT_BYTES * 128))
+    assert len(store_module._read_bounded(path)) == MAX_DOCUMENT_BYTES + 1
+
+    path.write_bytes(b"x" * MAX_DOCUMENT_BYTES)
+    assert len(store_module._read_bounded(path)) == MAX_DOCUMENT_BYTES
+
+
+def test_the_limit_is_refused_only_once_it_is_passed(tmp_path: Path) -> None:
+    """Exactly at the limit is not over it: that file is read, and fails on its contents."""
+    path = tmp_path / "settings.json"
+    path.write_bytes(b"x" * MAX_DOCUMENT_BYTES)
+    at_the_limit = _load(_store(tmp_path))
+    assert "UNREADABLE" in at_the_limit.notice
+
+    path.write_bytes(b"x" * (MAX_DOCUMENT_BYTES + 1))
+    over_it = _load(_store(tmp_path))
+    assert "TOO LARGE" in over_it.notice
+
+
+def test_an_ordinary_document_is_nowhere_near_the_limit(tmp_path: Path) -> None:
+    """The bound is generous: this build's own writes never come close to reaching it."""
+    store = _store(tmp_path)
+    settings = LocalSettings(display_name="d" * 16)
+    assert store.save(SETTINGS_KIND, version=CURRENT, data=settings.to_data()) == ""
+    assert (tmp_path / "settings.json").stat().st_size < MAX_DOCUMENT_BYTES // 8
+    assert _load(store).value == settings
+
+
+def test_a_load_that_finds_nothing_still_reads_nothing(tmp_path: Path) -> None:
+    """A missing file is not a failure, and is not an excuse to fall back to a wide read."""
+    loaded = _load(_store(tmp_path / "absent"))
+    assert (loaded.value, loaded.notice, loaded.writable) == (None, "", True)
 
 
 # -- writing ------------------------------------------------------------------
@@ -184,22 +241,117 @@ def test_a_write_that_fails_half_way_leaves_the_previous_save_intact(
 
     assert "COULD NOT BE WRITTEN" in notice
     assert (tmp_path / "settings.json").read_bytes() == original
-    assert not (tmp_path / "settings.json.tmp").exists()
+    assert not list(tmp_path.glob(f"*{store_module.TEMP_SUFFIX}"))
 
 
 def test_a_temporary_left_by_an_earlier_kill_is_inert(tmp_path: Path) -> None:
+    """Nothing reads it, nothing is confused by it, and the next write is unaffected.
+
+    It is also deliberately not swept up: from the outside, a temporary abandoned by a
+    kill and one another writer is still filling look exactly alike.
+    """
     store = _store(tmp_path)
     store.save(SETTINGS_KIND, version=CURRENT, data=LocalSettings(scale=2).to_data())
-    leftover = tmp_path / "settings.json.tmp"
+    leftover = tmp_path / f"settings.json.abandoned{store_module.TEMP_SUFFIX}"
     leftover.write_bytes(b"half a document")
 
     loaded = _load(store)
     assert loaded.value == LocalSettings(scale=2)
 
     store.save(SETTINGS_KIND, version=CURRENT, data=LocalSettings(scale=4).to_data())
-    assert not leftover.exists()
+    assert leftover.read_bytes() == b"half a document"
     reloaded = _load(store)
     assert reloaded.value == LocalSettings(scale=4)
+
+
+def test_a_write_never_stages_into_a_name_that_already_exists(tmp_path: Path) -> None:
+    """The old fixed name is just another file now, and is not reused or removed."""
+    store = _store(tmp_path)
+    squatter = tmp_path / f"settings.json{store_module.TEMP_SUFFIX}"
+    squatter.write_bytes(b"not mine")
+
+    assert store.save(SETTINGS_KIND, version=CURRENT, data=LocalSettings(scale=6).to_data()) == ""
+
+    assert squatter.read_bytes() == b"not mine"
+    assert _load(store).value == LocalSettings(scale=6)
+
+
+def test_two_writers_in_flight_never_share_a_staging_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Hold both renames back, and look at what each writer staged.
+
+    A shared staging name would show up here as one path written twice: the second
+    writer's bytes sitting in the file the first one is about to rename into place.
+    """
+    store = _store(tmp_path)
+    staged: list[Path] = []
+
+    def hold(source: object, target: object) -> None:
+        staged.append(Path(str(source)))
+
+    monkeypatch.setattr(os, "replace", hold)
+    store.save(SETTINGS_KIND, version=CURRENT, data=LocalSettings(scale=2).to_data())
+    store.save(SETTINGS_KIND, version=CURRENT, data=LocalSettings(scale=5).to_data())
+
+    assert len(staged) == 2
+    assert staged[0] != staged[1]
+    assert all(path.exists() for path in staged)
+    assert staged[0].read_bytes() != staged[1].read_bytes()
+
+
+def test_a_failed_write_removes_its_own_temporary_and_no_other(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One writer's failure must not clear away what another writer is staging."""
+    store = _store(tmp_path)
+    store.save(SETTINGS_KIND, version=CURRENT, data=LocalSettings(scale=2).to_data())
+    original = (tmp_path / "settings.json").read_bytes()
+    others = []
+    for name in ("settings.json.tmp", "settings.json.elsewhere.tmp"):
+        other = tmp_path / name
+        other.write_bytes(b"somebody else is writing this")
+        others.append(other)
+
+    def interrupted(source: object, target: object) -> None:
+        raise OSError("interrupted")
+
+    monkeypatch.setattr(os, "replace", interrupted)
+    notice = store.save(SETTINGS_KIND, version=CURRENT, data=LocalSettings(scale=7).to_data())
+
+    assert "COULD NOT BE WRITTEN" in notice
+    assert (tmp_path / "settings.json").read_bytes() == original
+    assert all(other.read_bytes() == b"somebody else is writing this" for other in others)
+    assert sorted(path.name for path in tmp_path.glob(f"*{store_module.TEMP_SUFFIX}")) == sorted(
+        other.name for other in others
+    )
+
+
+def test_a_symbolic_link_at_the_target_is_replaced_not_followed(tmp_path: Path) -> None:
+    """A rename replaces a name. The link goes; what it pointed at is not written to.
+
+    The save directory belongs to the person playing, so reading through a link is their
+    business. Writing through one is not: it would let a name inside the profile decide
+    where this document's bytes land.
+    """
+    directory = tmp_path / "profile"
+    directory.mkdir()
+    far = tmp_path / "far.json"
+    _write(far, LocalSettings(scale=2).to_data())
+    before = far.read_bytes()
+    link = directory / "settings.json"
+    try:
+        link.symlink_to(far)
+    except OSError, NotImplementedError:  # pragma: no cover - platform dependent
+        pytest.skip("this platform does not allow creating symbolic links")
+
+    store = _store(directory)
+    assert _load(store).value == LocalSettings(scale=2)
+    assert store.save(SETTINGS_KIND, version=CURRENT, data=LocalSettings(scale=7).to_data()) == ""
+
+    assert far.read_bytes() == before
+    assert not link.is_symlink()
+    assert _load(store).value == LocalSettings(scale=7)
 
 
 # -- migration ----------------------------------------------------------------

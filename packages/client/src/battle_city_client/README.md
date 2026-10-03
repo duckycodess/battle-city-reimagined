@@ -168,9 +168,12 @@ They live in `$BATTLE_CITY_SAVE_DIR` if that is set, otherwise
 `~/.local/share/battle-city-reimagined`. The path is resolved on first use and the
 directory is created by the first write, so a launch that changes nothing creates nothing.
 
-Writes are atomic: a temporary file, flushed and `fsync`-ed, moved onto the target with
-`os.replace`, then a `fsync` of the directory. A reader sees the whole old file or the
-whole new one.
+Writes are atomic: a uniquely named, exclusively created temporary file, flushed and
+`fsync`-ed, moved onto the target with `os.replace`, then a `fsync` of the directory. A
+reader sees the whole old file or the whole new one, two writers never stage into the same
+file, and a failed write removes only its own temporary. Reads are bounded before anything
+is parsed — at most one byte past the size limit leaves the disk — so an oversized file is
+refused without being loaded.
 
 **A save file never stops a launch.** A file that cannot be read leaves the client on its
 defaults, says so once on the main menu and the controls screen, and is then left exactly

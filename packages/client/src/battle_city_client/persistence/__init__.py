@@ -45,9 +45,13 @@ Writing
 -------
 Every write is a temporary file, flushed and ``fsync``-ed, then moved onto the target with
 :func:`os.replace`, then a ``fsync`` of the directory. A reader sees the whole old file or
-the whole new one. A failed write removes its temporary file and leaves the target
-untouched; a temporary left behind by a kill is inert, and the next write replaces it.
-Nothing is written unless something actually changed.
+the whole new one. The temporary is exclusive and uniquely named, so two writers never
+stage into the same file, and a failed write removes only its own. A temporary left behind
+by a kill is inert and is left alone, since nothing here can tell it from one another
+writer is still filling. Nothing is written unless something actually changed.
+
+Reading is bounded before anything is parsed: at most one byte past the size limit is read
+from the file, so an oversized one is refused without being loaded.
 
 Recovery, and its limits
 ------------------------
