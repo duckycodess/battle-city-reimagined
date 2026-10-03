@@ -67,6 +67,18 @@ PAUSE_EDGE_BINDINGS: Final[Mapping[int, Action]] = {
 }
 """The pause menu, where ``ESCAPE`` resumes instead of abandoning the run."""
 
+LOBBY_EDGE_BINDINGS: Final[Mapping[int, Action]] = {
+    **MENU_EDGE_BINDINGS,
+    pygame.K_r: Action.ONLINE_READY,
+    pygame.K_m: Action.ONLINE_MODE,
+    pygame.K_l: Action.ONLINE_STAGE,
+}
+"""The lobby, where readiness, the mode and the stage are each one key.
+
+``SPACE`` is deliberately left as confirm-and-therefore-start: it is the key a player
+holds to fire, and a lobby is the one screen where that has no meaning yet.
+"""
+
 WINDOW_EDGE_BINDINGS: Final[Mapping[int, Action]] = {
     pygame.K_MINUS: Action.SCALE_DOWN,
     pygame.K_KP_MINUS: Action.SCALE_DOWN,
@@ -83,6 +95,9 @@ CONTROL_HELP: Final[tuple[tuple[str, str], ...]] = (
     ("SELECT", "ENTER"),
     ("BACK", "ESC"),
     ("WINDOW SCALE", "- / +"),
+    ("LOBBY READY", "R"),
+    ("LOBBY MODE", "M"),
+    ("LOBBY STAGE", "L"),
     ("QUIT", "WINDOW CLOSE"),
 )
 """What the controls screen lists. Kept beside the tables so the two cannot drift."""
@@ -91,10 +106,12 @@ CONTROL_HELP: Final[tuple[tuple[str, str], ...]] = (
 def edge_bindings_for(screen: Screen) -> Mapping[int, Action]:
     """The edge-triggered table that applies on ``screen``."""
     match screen:
-        case Screen.PLAYING:
+        case Screen.PLAYING | Screen.ONLINE_PLAY:
             return PLAY_EDGE_BINDINGS
         case Screen.PAUSED:
             return PAUSE_EDGE_BINDINGS
+        case Screen.ONLINE_LOBBY:
+            return LOBBY_EDGE_BINDINGS
         case _:
             return MENU_EDGE_BINDINGS
 

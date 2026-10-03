@@ -27,9 +27,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Final
 
+from battle_city_protocol import ClientMessage, MatchMode, ServerMessage
 from battle_city_sim import DEFAULT_RULES, Rules, RunOutcome
 
 from .intents import IDLE_INTENT, Action, PlayerIntent
+from .online import OnlineConfig, OnlinePhase, OnlineSession
 from .session import DEFAULT_SEED, StageSession
 from .stage_adapter import StageEntry
 
@@ -43,6 +45,11 @@ class Screen(Enum):
     PLAYING = "playing"
     PAUSED = "paused"
     RUN_OVER = "run_over"
+    ONLINE_LOBBY = "online_lobby"
+    """A server-owned lobby: roster, settings, readiness, and the host's start."""
+
+    ONLINE_PLAY = "online_play"
+    """A run the server is running. Everything on this screen came off the wire."""
 
 
 class PauseCause(Enum):
@@ -57,7 +64,8 @@ class MainMenuItem(Enum):
 
     PLAY = 0
     CONTROLS = 1
-    QUIT = 2
+    ONLINE = 2
+    QUIT = 3
 
 
 class PauseItem(Enum):
@@ -78,6 +86,7 @@ class RunOverItem(Enum):
 MAIN_MENU_LABELS: Final[dict[MainMenuItem, str]] = {
     MainMenuItem.PLAY: "PLAY",
     MainMenuItem.CONTROLS: "CONTROLS",
+    MainMenuItem.ONLINE: "ONLINE",
     MainMenuItem.QUIT: "QUIT",
 }
 
@@ -99,6 +108,18 @@ OUTCOME_HEADLINES: Final[dict[RunOutcome, str]] = {
 """Wording for each outcome the simulation can record. There is no win outcome yet."""
 
 EMPTY_CATALOG_NOTICE: Final[str] = "NO STAGES AVAILABLE"
+
+NO_SERVER_NOTICE: Final[str] = "ONLINE NEEDS --SERVER --SESSION --TICKET"
+"""Shown when online play was chosen without the details needed to reach a lobby."""
+
+ONLINE_HELP: Final[tuple[tuple[str, str], ...]] = (
+    ("READY", "R"),
+    ("MODE (HOST)", "M"),
+    ("STAGE (HOST)", "L"),
+    ("START (HOST)", "ENTER"),
+    ("LEAVE", "ESC"),
+)
+"""What the lobby screen lists. Kept beside the shell so the two cannot drift."""
 
 PAUSE_CAUSE_NOTICES: Final[dict[PauseCause, str]] = {
     PauseCause.PLAYER: "PAUSED BY PLAYER",
@@ -131,6 +152,9 @@ class ClientShell:
     focused: bool = True
     pause_cause: PauseCause | None = None
     running: bool = True
+    online_config: OnlineConfig | None = None
+    online: OnlineSession | None = field(default=None, init=False)
+    outbox: list[ClientMessage] = field(default_factory=list, init=False, repr=False)
     notice: str = field(default="", init=False)
 
     # -- queries ---------------------------------------------------------------
@@ -159,8 +183,30 @@ class ClientShell:
 
     @property
     def consumes_ticks(self) -> bool:
-        """Whether the shell is in a state that advances the simulation."""
+        """Whether the shell is in a state that advances a *local* simulation.
+
+        Never true online. An online run is advanced by the server and arrives as
+        snapshots; a client that also stepped a local copy would be showing a second
+        game that happens to look like the first one until it does not.
+        """
         return self.screen is Screen.PLAYING and self.session is not None
+
+    @property
+    def drives_tank(self) -> bool:
+        """Whether held keys are being sampled for a tank, locally or over the wire."""
+        return self.consumes_ticks or (
+            self.screen is Screen.ONLINE_PLAY and self.online is not None
+        )
+
+    @property
+    def online_phase(self) -> OnlinePhase | None:
+        """Where the online session has got to, or ``None`` when there is not one."""
+        return None if self.online is None else self.online.phase
+
+    @property
+    def wants_link(self) -> bool:
+        """Whether the shell is on an online screen and needs a transport open."""
+        return self.screen in (Screen.ONLINE_LOBBY, Screen.ONLINE_PLAY)
 
     @property
     def outcome(self) -> RunOutcome | None:
@@ -198,8 +244,81 @@ class ClientShell:
         self.open_session(StageSession.start(entry.stage, seed=self.seed, rules=self.rules))
         return True
 
+    def open_online(self) -> bool:
+        """Begin an online session and queue the seat request. Returns whether it began.
+
+        Nothing is sent from here. The join message goes into :attr:`outbox`, which the
+        loop drains into whatever transport it opened; the shell never holds a socket.
+        """
+        if self.online_config is None:
+            self.notice = NO_SERVER_NOTICE
+            return False
+        self.session = None
+        self.pause_cause = None
+        self.notice = ""
+        session = self.online_config.session()
+        self.online = session
+        self.outbox.append(session.join_message())
+        self.screen = Screen.ONLINE_LOBBY
+        return True
+
+    def take_outbox(self) -> tuple[ClientMessage, ...]:
+        """Hand over everything waiting to be sent, and forget it."""
+        pending = tuple(self.outbox)
+        self.outbox.clear()
+        return pending
+
+    def receive(self, message: ServerMessage) -> None:
+        """Apply one authoritative message and follow wherever it leads.
+
+        The two transitions that happen here are the server's, not the shell's: a match
+        that started makes this client prove its membership, and a membership that was
+        accepted puts it on the online screen. Neither is anticipated.
+        """
+        session = self.online
+        if session is None:
+            return
+        session.apply(message)
+        if session.phase is OnlinePhase.STARTING:
+            request = session.join_request()
+            if request is not None:
+                self.outbox.append(request)
+        if session.phase is OnlinePhase.PLAYING and self.screen is Screen.ONLINE_LOBBY:
+            self.screen = Screen.ONLINE_PLAY
+
+    def pump_online(self, intent: PlayerIntent = IDLE_INTENT) -> None:
+        """Offer this client's intent for the tick the server last reported."""
+        session = self.online
+        if session is None or self.screen is not Screen.ONLINE_PLAY:
+            return
+        batch = session.input_batch(intent)
+        if batch is not None:
+            self.outbox.append(batch)
+
+    def link_lost(self, detail: str = "") -> None:
+        """Record that the transport ended. The session is over for this client."""
+        if self.online is not None:
+            self.online.link_lost(detail)
+
+    def leave_online(self) -> None:
+        """Give up the seat, say so if the session is still live, and go back."""
+        session = self.online
+        if session is not None:
+            leaving = session.leave_message()
+            if leaving is not None:
+                self.outbox.append(leaving)
+        self.online = None
+        self.screen = Screen.MAIN_MENU
+        self.notice = ""
+
     def set_focused(self, focused: bool) -> None:
-        """Record window focus, pausing a live run when focus is lost."""
+        """Record window focus, pausing a live *local* run when focus is lost.
+
+        An online run is not paused, because pausing it would be a fiction: the server
+        keeps running the match whatever this window is doing. The held keys are still
+        dropped by the loop, so an unfocused client stops driving its tank rather than
+        driving it blind.
+        """
         self.focused = focused
         if not focused and self.screen is Screen.PLAYING:
             self._pause(PauseCause.FOCUS_LOSS)
@@ -231,6 +350,10 @@ class ClientShell:
                 self._handle_paused(action)
             case Screen.RUN_OVER:
                 self._handle_run_over(action)
+            case Screen.ONLINE_LOBBY:
+                self._handle_online_lobby(action)
+            case Screen.ONLINE_PLAY:
+                self._handle_online_play(action)
 
     # -- per-screen handlers ---------------------------------------------------
 
@@ -252,6 +375,8 @@ class ClientShell:
                 self.screen = Screen.STAGE_SELECT
             case MainMenuItem.CONTROLS:
                 self.screen = Screen.CONTROLS
+            case MainMenuItem.ONLINE:
+                self.open_online()
             case MainMenuItem.QUIT:
                 self.quit()
 
@@ -314,6 +439,63 @@ class ClientShell:
             case _:
                 return
 
+    def _handle_online_lobby(self, action: Action) -> None:
+        session = self.online
+        if session is None or action is Action.UI_CANCEL:
+            self.leave_online()
+            return
+        if session.phase is OnlinePhase.ENDED:
+            if action in (Action.UI_CONFIRM, Action.ONLINE_READY):
+                self.leave_online()
+            return
+        match action:
+            case Action.ONLINE_READY:
+                self._offer(session.ready_message(not session.ready))
+            case Action.ONLINE_MODE:
+                self._offer(session.configure_message(mode=self._next_mode(session)))
+            case Action.ONLINE_STAGE:
+                self._offer(session.configure_message(level_id=self._next_level(session)))
+            case Action.UI_CONFIRM:
+                self._offer(session.start_message())
+            case _:
+                return
+
+    def _handle_online_play(self, action: Action) -> None:
+        """Leaving is the only thing a key does here.
+
+        There is no pause: the match belongs to the server and this window cannot stop
+        it. Offering a pause that did nothing would be worse than not offering one.
+        """
+        if action in (Action.UI_CANCEL, Action.TOGGLE_PAUSE):
+            self.leave_online()
+
+    def _offer(self, message: ClientMessage | None) -> None:
+        """Queue a message the session was willing to produce, and drop a ``None``."""
+        if message is not None:
+            self.outbox.append(message)
+
+    @staticmethod
+    def _next_mode(session: OnlineSession) -> MatchMode:
+        """The next mode the server offers, including the ones it will not start.
+
+        A competitive mode is selectable because the setting is real and is recorded in
+        the match settings. The lobby says plainly that this build will not start one,
+        and the server refuses if anybody tries.
+        """
+        offered = tuple(MatchMode) if session.info is None else tuple(session.info.offered_modes)
+        current = MatchMode.COOP if session.lobby is None else session.lobby.settings.mode
+        index = offered.index(current) if current in offered else -1
+        return offered[(index + 1) % len(offered)]
+
+    @staticmethod
+    def _next_level(session: OnlineSession) -> str | None:
+        offered = () if session.info is None else tuple(session.info.offered_levels)
+        if not offered or session.lobby is None:
+            return None
+        current = session.lobby.settings.level_id
+        index = offered.index(current) if current in offered else -1
+        return offered[(index + 1) % len(offered)]
+
     # -- shared transitions ----------------------------------------------------
 
     def resume(self) -> None:
@@ -338,5 +520,6 @@ class ClientShell:
 
     def _return_to_main_menu(self) -> None:
         self.session = None
+        self.online = None
         self.pause_cause = None
         self.screen = Screen.MAIN_MENU

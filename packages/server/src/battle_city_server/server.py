@@ -62,6 +62,7 @@ from battle_city_protocol import (
 )
 from battle_city_sim import SimulationState
 
+from .authority import SessionAuthority
 from .clock import TickClock
 from .config import SessionConfig
 from .logs import content_label, log_event, session_logger
@@ -104,18 +105,34 @@ class _Connection:
 
 
 class SessionServer:
-    """Runs one authoritative session over any number of connected channels."""
+    """Runs one authoritative session over any number of connected channels.
+
+    The authority is injected rather than built, because there are now two kinds. Handed
+    a :class:`~battle_city_server.config.SessionConfig` it runs a bare game session, the
+    way it always did; handed a
+    :class:`~battle_city_server.lobby.MatchSession` it runs a lobby that becomes one.
+    Nothing in this class can tell the difference, which is the point: sockets, queues
+    and deadlines belong here, and every rule belongs on the other side of
+    :class:`~battle_city_server.authority.SessionAuthority`.
+    """
 
     def __init__(
-        self, config: SessionConfig, *, flush_timeout: float = DEFAULT_FLUSH_TIMEOUT
+        self,
+        session: SessionConfig | SessionAuthority,
+        *,
+        flush_timeout: float = DEFAULT_FLUSH_TIMEOUT,
     ) -> None:
-        self._session = GameSession(config)
+        self._session: SessionAuthority = (
+            GameSession(session) if isinstance(session, SessionConfig) else session
+        )
         self._connections: dict[int, _Connection] = {}
         self._flush_timeout = flush_timeout
         self._log = session_logger()
+        self._ticking = asyncio.Event()
+        self._wake()
 
     @property
-    def session(self) -> GameSession:
+    def session(self) -> SessionAuthority:
         """The authority. Tests and diagnostics read it; nothing else should drive it."""
         return self._session
 
@@ -137,7 +154,7 @@ class SessionServer:
         Transports build their channels through here so none of them can forget the
         deadline. A channel built without one would read a half-sent frame for ever.
         """
-        deadline = self._session.config.limits.frame_deadline_seconds
+        deadline = self._session.limits.frame_deadline_seconds
 
         async def guard(read: Awaitable[bytes]) -> bytes:
             return await asyncio.wait_for(read, deadline)
@@ -146,7 +163,7 @@ class SessionServer:
 
     async def serve(self, channel: ServerChannel) -> None:
         """Serve one client until its channel ends. Intended to be run as a task."""
-        limits = self._session.config.limits
+        limits = self._session.limits
         if len(self._connections) >= limits.max_connections:
             await self._refuse(channel, RejectionCode.TOO_MANY_CONNECTIONS)
             return
@@ -183,9 +200,19 @@ class SessionServer:
         await asyncio.sleep(0)
 
     async def run(self, clock: TickClock, *, ticks: int | None = None) -> None:
-        """Advance ticks on ``clock`` until the session closes or ``ticks`` have run."""
+        """Advance ticks on ``clock`` until the session closes or ``ticks`` have run.
+
+        An authority that is not ticking yet — a lobby, still deciding — is waited on
+        rather than polled. Asking a fixed-rate clock for tick zero over and over would
+        burn a core deciding that tick zero is still not due, and would count catch-up
+        against a run that has not begun.
+        """
         advanced = 0
         while not self._session.closed and (ticks is None or advanced < ticks):
+            if not self._session.ticking:
+                await self._ticking.wait()
+                self._ticking.clear()
+                continue
             await clock.wait_for_tick(self._session.tick)
             await self.advance_tick()
             advanced += 1
@@ -196,6 +223,7 @@ class SessionServer:
         """End the session and close every connection, telling each one why."""
         for reply in self._session.close(code, detail):
             self._deliver(reply)
+        self._wake()
         connections = list(self._connections.values())
         for connection in connections:
             connection.closing = True
@@ -210,7 +238,7 @@ class SessionServer:
         await channel.close()
 
     async def _read_loop(self, connection: _Connection) -> None:
-        limits = self._session.config.limits
+        limits = self._session.limits
         while not connection.closing:
             joined = self._session.slot_of(connection.identifier) is not None
             try:
@@ -239,6 +267,7 @@ class SessionServer:
             replies = self._session.handle(connection.identifier, message)
             for reply in replies:
                 self._deliver(reply)
+            self._wake()
             if (
                 not joined
                 and self._refused(replies)
@@ -346,7 +375,9 @@ class SessionServer:
         """Forget a connection, whatever ended it, and let the run carry on without it."""
         self._connections.pop(connection.identifier, None)
         slot = self._session.slot_of(connection.identifier)
-        self._session.disconnect(connection.identifier)
+        for reply in self._session.disconnect(connection.identifier):
+            self._deliver(reply)
+        self._wake()
         self._log_connection("connection_dropped", connection, slot=slot)
         connection.closing = True
         self._finish(connection)
@@ -380,6 +411,15 @@ class SessionServer:
                 writer.cancel()
         await connection.channel.close()
 
+    def _wake(self) -> None:
+        """Release the tick loop once there is something for it to do, or nothing left.
+
+        Both conditions matter. A match that started gives the loop ticks to run; a
+        lobby that ended gives it a reason to stop waiting and return.
+        """
+        if self._session.ticking or self._session.closed:
+            self._ticking.set()
+
     @staticmethod
     def _refused(replies: tuple[Reply, ...]) -> bool:
         """Whether answering a message produced a refusal rather than progress."""
@@ -394,14 +434,13 @@ class SessionServer:
         peer: str | None = None,
         level: int = logging.INFO,
     ) -> None:
-        config = self._session.config
         log_event(
             self._log,
             event,
-            session_id=config.session_id,
+            session_id=self._session.session_id,
             tick=self._session.tick,
-            content=content_label(config.content),
-            rules_digest=self._session.info.rules_digest,
+            content=content_label(self._session.content),
+            rules_digest=self._session.rules_digest,
             peer=peer,
             reason=reason,
             detail=detail,
@@ -418,14 +457,13 @@ class SessionServer:
         detail: str | None = None,
         level: int = logging.INFO,
     ) -> None:
-        config = self._session.config
         log_event(
             self._log,
             event,
-            session_id=config.session_id,
+            session_id=self._session.session_id,
             tick=self._session.tick,
-            content=content_label(config.content),
-            rules_digest=self._session.info.rules_digest,
+            content=content_label(self._session.content),
+            rules_digest=self._session.rules_digest,
             slot=slot if slot is not None else self._session.slot_of(connection.identifier),
             peer=connection.channel.peer,
             connection=connection.identifier,

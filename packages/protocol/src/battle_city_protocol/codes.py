@@ -105,3 +105,32 @@ class RejectionCode(StrEnum):
 
     SERVER_SHUTDOWN = "server_shutdown"
     """The server is stopping."""
+
+    LOBBY_FULL = "lobby_full"
+    """Every seat in the lobby is taken."""
+
+    NOT_HOST = "not_host"
+    """Only the lobby's host may change the match settings or start the match."""
+
+    SETTINGS_STALE = "settings_stale"
+    """The message agreed to a settings revision the lobby has already moved past.
+
+    Readiness and start are agreements about a specific configuration. When the host
+    changes one, readiness is cleared and an in-flight agreement is refused rather than
+    being applied to settings the sender never saw.
+    """
+
+    MEMBERS_NOT_READY = "members_not_ready"
+    """Start was requested while a connected member had not agreed to the settings."""
+
+    MODE_UNSUPPORTED = "mode_unsupported"
+    """This build cannot run the selected match mode, so it refuses to start it.
+
+    Competitive modes are configurable here and are deliberately not startable: the
+    shared simulation has one player faction, no player-versus-player damage and no
+    competitive result, so a server that started one would be reporting a match it was
+    not running. The refusal names the mode rather than pretending.
+    """
+
+    STAGE_UNSUPPORTED = "stage_unsupported"
+    """The chosen stage cannot seat the lobby's roster, so the match cannot start."""

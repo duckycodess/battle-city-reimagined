@@ -22,15 +22,18 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pygame
-from battle_city_sim import Faction, SimulationState, Tile, TileGrid
+from battle_city_sim import Faction, RunOutcome, SimulationState, Tile, TileGrid
 
 from . import theme
 from .assets import AssetLibrary
 from .glyphs import GLYPH_HEIGHT, line_step, text_width
 from .keymap import CONTROL_HELP
+from .online import OnlinePhase, OnlineSession
+from .remote import RemoteBoard, shot_origin
 from .session import StageSession
 from .shell import (
     MAIN_MENU_LABELS,
+    ONLINE_HELP,
     OUTCOME_HEADLINES,
     PAUSE_CAUSE_NOTICES,
     PAUSE_LABELS,
@@ -46,6 +49,7 @@ TITLE: str = "BATTLE CITY"
 SUBTITLE: str = "REIMAGINED"
 CURSOR: str = ">"
 HUD_PADDING: int = 4
+MARGIN: int = 8
 STAGE_SELECT_NOTE: tuple[str, ...] = (
     "ENEMY WAVE",
     "CADENCE AND",
@@ -93,6 +97,10 @@ class Renderer:
             case Screen.RUN_OVER:
                 self._draw_run(surface, shell)
                 self._draw_run_over_overlay(surface, shell)
+            case Screen.ONLINE_LOBBY:
+                self._draw_online_lobby(surface, shell)
+            case Screen.ONLINE_PLAY:
+                self._draw_online_run(surface, shell)
 
     # -- text ------------------------------------------------------------------
 
@@ -347,6 +355,252 @@ class Renderer:
         """Lives as counted marks beside the number, for a reading without reading."""
         for index in range(min(lives, 5)):
             surface.fill(theme.OK, pygame.Rect(x + index * 5, y, 3, 6))
+
+    # -- online ----------------------------------------------------------------
+
+    def _draw_online_lobby(self, surface: pygame.Surface, shell: ClientShell) -> None:
+        """The lobby: who is in it, what was agreed, and whether it can start.
+
+        The blocked line is the honest half of this screen. A lobby configured for a
+        mode this build will not run says so here, with the server's own reason code,
+        instead of letting a host press start and be refused with no explanation.
+        """
+        session = shell.online
+        center_x = theme.LOGICAL_SIZE[0] // 2
+        self.text_centered(surface, "ONLINE LOBBY", center_x, 16, theme.ACCENT, 2)
+        panel = pygame.Rect(MARGIN, 40, theme.LOGICAL_SIZE[0] - 2 * MARGIN, 150)
+        self._panel(surface, panel)
+        left = panel.x + 8
+        right = panel.right - 8
+        y = panel.y + 8
+
+        if session is None:
+            self.text_centered(surface, "NOT CONNECTED", center_x, y + 40, theme.DANGER)
+            return
+
+        y = self._draw_lobby_settings(surface, session, left, right, y)
+        y = self._draw_lobby_roster(surface, session, left, right, y + 4)
+        self._draw_lobby_status(surface, session, center_x, panel.bottom - 22)
+        self._draw_lobby_help(surface, panel.bottom + 6)
+
+    def _draw_lobby_settings(
+        self, surface: pygame.Surface, session: OnlineSession, left: int, right: int, y: int
+    ) -> int:
+        lobby = session.lobby
+        phase = "WAITING FOR SERVER" if lobby is None else f"REVISION {lobby.revision}"
+        self.text(surface, "SESSION", (left, y), theme.TEXT_DIM)
+        self.text_right(surface, session.session_id.upper()[:16], right, y, theme.TEXT)
+        y += line_step()
+        self.text(surface, "STATUS", (left, y), theme.TEXT_DIM)
+        self.text_right(surface, phase, right, y, theme.TEXT)
+        y += line_step()
+        if lobby is None:
+            return y
+        mode = lobby.settings.mode
+        playable = session.mode_playable(mode)
+        self.text(surface, "MODE", (left, y), theme.TEXT_DIM)
+        self.text_right(
+            surface,
+            mode.value.replace("_", " ").upper(),
+            right,
+            y,
+            theme.TEXT if playable else theme.DANGER,
+        )
+        y += line_step()
+        if not playable:
+            self.text(surface, "NOT PLAYABLE IN THIS BUILD", (left, y), theme.DANGER)
+            y += line_step()
+        self.text(surface, "STAGE", (left, y), theme.TEXT_DIM)
+        self.text_right(surface, lobby.settings.level_id.upper()[:16], right, y, theme.TEXT)
+        y += line_step()
+        self.text(surface, "CHEATS", (left, y), theme.TEXT_DIM)
+        self.text_right(
+            surface, "ON" if lobby.settings.cheats_enabled else "OFF", right, y, theme.TEXT
+        )
+        return y + line_step()
+
+    def _draw_lobby_roster(
+        self, surface: pygame.Surface, session: OnlineSession, left: int, right: int, y: int
+    ) -> int:
+        lobby = session.lobby
+        self.text(surface, "ROSTER", (left, y), theme.ACCENT)
+        y += line_step()
+        if lobby is None or not lobby.members:
+            self.text(surface, "EMPTY", (left, y), theme.TEXT_DIM)
+            return y + line_step()
+        for member in lobby.members:
+            mine = member.slot == session.slot
+            marker = CURSOR if mine else " "
+            team = "" if member.team is None else f" T{member.team}"
+            role = " HOST" if member.host else ""
+            label = f"{marker}P{member.slot} {member.display_name.upper()}{team}{role}"
+            self.text(surface, label[:26], (left, y), theme.TEXT if mine else theme.TEXT_DIM)
+            self.text_right(
+                surface,
+                "READY" if member.ready else "WAITING",
+                right,
+                y,
+                theme.OK if member.ready else theme.TEXT_DIM,
+            )
+            y += line_step()
+        return y
+
+    def _draw_lobby_status(
+        self, surface: pygame.Surface, session: OnlineSession, center_x: int, y: int
+    ) -> None:
+        if session.notice:
+            self.text_centered(surface, session.notice[:46], center_x, y, theme.DANGER)
+            return
+        lobby = session.lobby
+        if lobby is None:
+            return
+        if lobby.startable:
+            self.text_centered(surface, "READY TO START", center_x, y, theme.OK)
+            return
+        blocked = lobby.blocked
+        reason = "" if blocked is None else blocked.value.replace("_", " ").upper()
+        self.text_centered(surface, reason or "WAITING", center_x, y, theme.TEXT_DIM)
+
+    def _draw_lobby_help(self, surface: pygame.Surface, y: int) -> None:
+        left = MARGIN + 8
+        right = theme.LOGICAL_SIZE[0] - MARGIN - 8
+        for label, keys in ONLINE_HELP:
+            self.text(surface, label, (left, y), theme.TEXT_DIM)
+            self.text_right(surface, keys, right, y, theme.TEXT)
+            y += line_step()
+
+    def _draw_online_run(self, surface: pygame.Surface, shell: ClientShell) -> None:
+        """A run the server is running. Every pixel here came off the wire."""
+        session = shell.online
+        if session is None:
+            return
+        board = session.board
+        if board is None:
+            self._draw_online_waiting(surface, session)
+            return
+        self._draw_remote_playfield(surface, board)
+        self._draw_remote_hud(surface, session, board)
+        if session.phase is OnlinePhase.ENDED:
+            self._draw_online_ended_overlay(surface, session)
+
+    def _draw_online_waiting(self, surface: pygame.Surface, session: OnlineSession) -> None:
+        center_x = theme.LOGICAL_SIZE[0] // 2
+        self.text_centered(surface, "JOINING THE MATCH", center_x, 108, theme.ACCENT, 2)
+        self.text_centered(
+            surface,
+            session.notice[:46] or "WAITING FOR THE FIRST SNAPSHOT",
+            center_x,
+            136,
+            theme.TEXT_DIM,
+        )
+
+    def _draw_remote_playfield(self, surface: pygame.Surface, board: RemoteBoard) -> None:
+        origin_x, origin_y = theme.PLAYFIELD_ORIGIN
+        size = self.assets.rules.tile_size
+        self._draw_terrain(surface, board.grid, base_destroyed=board.base_destroyed)
+
+        for pickup in board.powerups:
+            art = self.assets.powerup(pickup.kind)
+            surface.blit(art, (origin_x + pickup.cell.x * size, origin_y + pickup.cell.y * size))
+
+        for tank in board.tanks:
+            art = self.assets.tank(tank.variant, tank.facing, invincible=tank.invincible)
+            surface.blit(art, (origin_x + tank.x, origin_y + tank.y))
+
+        for shot in board.shots:
+            art = self.assets.projectile(shot.faction)
+            shot_x, shot_y = shot_origin(shot, self.assets.rules)
+            surface.blit(art, (origin_x + shot_x - 1, origin_y + shot_y - 1))
+
+        art = self.assets.tile(Tile.FOREST)
+        for cell in board.grid.positions_of(Tile.FOREST):
+            surface.blit(art, (origin_x + cell.x * size, origin_y + cell.y * size))
+        pygame.draw.rect(
+            surface,
+            theme.PANEL_EDGE,
+            pygame.Rect(*theme.PLAYFIELD_ORIGIN, theme.PLAYFIELD_SIZE, theme.PLAYFIELD_SIZE),
+            1,
+        )
+
+    def _draw_remote_hud(
+        self, surface: pygame.Surface, session: OnlineSession, board: RemoteBoard
+    ) -> None:
+        panel = pygame.Rect(*theme.HUD_ORIGIN, *theme.HUD_SIZE)
+        self._panel(surface, panel)
+        left = panel.x + HUD_PADDING
+        right = panel.right - HUD_PADDING
+        y = panel.y + 6
+
+        settings = session.settings
+        self.text(surface, "ONLINE", (left, y), theme.ACCENT)
+        y += line_step()
+        if settings is not None:
+            self.text(surface, settings.mode.value.upper()[:12], (left, y), theme.TEXT_DIM)
+            y += line_step()
+            self.text(surface, settings.level_id.upper()[:12], (left, y), theme.TEXT)
+            y += line_step() + 4
+
+        slot = session.slot
+        player = None if slot is None else board.player(slot)
+        tank = None if slot is None else board.tank_of(slot)
+        readings: tuple[tuple[str, str, theme.Color], ...] = (
+            ("TICK", str(board.tick), theme.TEXT),
+            ("SLOT", "-" if slot is None else f"P{slot}", theme.TEXT),
+            ("LIVES", "-" if player is None else str(player.lives), theme.TEXT),
+            (
+                "TANK",
+                "ALIVE" if tank is not None else "LOST",
+                theme.TEXT if tank is not None else theme.DANGER,
+            ),
+            ("PLAYERS", str(len(board.players)), theme.TEXT),
+            ("SHOTS", str(len(board.shots)), theme.TEXT),
+            ("TANKS", str(len(board.tanks)), theme.TEXT),
+        )
+        for label, value, color in readings:
+            self.text(surface, label, (left, y), theme.TEXT_DIM)
+            self.text_right(surface, value, right, y, color)
+            y += line_step()
+
+        y += 4
+        self.text(surface, "BASE", (left, y), theme.TEXT_DIM)
+        self.text_right(
+            surface,
+            "LOST" if board.base_destroyed else "OK",
+            right,
+            y,
+            theme.DANGER if board.base_destroyed else theme.OK,
+        )
+        y += line_step() + 2
+        # The hash the server published for this tick. Two clients showing different
+        # hashes for one tick are looking at different runs, which is worth being able
+        # to read off the screen rather than out of a packet capture.
+        self.text(surface, "HASH", (left, y), theme.TEXT_DIM)
+        y += line_step()
+        self.text(surface, board.state_hash[:12], (left, y), theme.TEXT_DIM)
+
+        self.text(surface, "ESC LEAVE", (left, panel.bottom - 14), theme.TEXT_DIM)
+
+    def _draw_online_ended_overlay(self, surface: pygame.Surface, session: OnlineSession) -> None:
+        """What the *server* said happened. The client never writes this line itself."""
+        self._dim(surface)
+        center_x = theme.LOGICAL_SIZE[0] // 2
+        panel = pygame.Rect(0, 0, 248, 112)
+        panel.center = (center_x, theme.LOGICAL_SIZE[1] // 2)
+        self._panel(surface, panel)
+        self.text_centered(surface, "SESSION ENDED", center_x, panel.y + 12, theme.DANGER, 2)
+        outcome = session.outcome
+        headline = "NO OUTCOME REPORTED"
+        if outcome is not None:
+            headline = OUTCOME_HEADLINES.get(RunOutcome(outcome), "RUN ENDED")
+        self.text_centered(surface, headline, center_x, panel.y + 38, theme.TEXT)
+        self.text_centered(
+            surface,
+            session.notice[:40] or "THE SERVER CLOSED THE SESSION",
+            center_x,
+            panel.y + 38 + line_step(),
+            theme.TEXT_DIM,
+        )
+        self.text_centered(surface, "ESC RETURNS", center_x, panel.bottom - 16, theme.TEXT_DIM)
 
     # -- overlays --------------------------------------------------------------
 

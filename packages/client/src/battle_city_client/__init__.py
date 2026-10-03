@@ -58,12 +58,17 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any, Final
 
 from .intents import Action, HeldActions, PlayerIntent, intent_from_held
+from .netlink import NetworkLink, TcpLink, open_tcp_link, parse_endpoint
+from .online import LobbyView, OnlineConfig, OnlinePhase, OnlineSession
+from .remote import RemoteBoard, RemoteStateError, board_from_snapshot, terrain_from_rows
 from .session import DEFAULT_SEED, StageSession
 from .shell import ClientShell, PauseCause, Screen
 from .stage_adapter import (
     StageAdapterError,
     StageEntry,
+    bundled_content_ref,
     bundled_stage_catalog,
+    content_ref_for,
     stage_catalog,
     stage_from_level,
 )
@@ -115,29 +120,43 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "DEFAULT_SEED",
-    "NOMINAL_TICK_RATE",
     "Action",
     "AssetLibrary",
     "ClientApp",
     "ClientShell",
+    "DEFAULT_SEED",
     "FixedTickAccumulator",
     "HeldActions",
+    "LobbyView",
+    "NOMINAL_TICK_RATE",
+    "NetworkLink",
+    "OnlineConfig",
+    "OnlinePhase",
+    "OnlineSession",
     "PauseCause",
     "PlayerIntent",
     "Presenter",
     "ProceduralAssetLibrary",
+    "RemoteBoard",
+    "RemoteStateError",
     "Renderer",
     "Screen",
     "StageAdapterError",
     "StageEntry",
     "StageSession",
+    "TcpLink",
+    "board_from_snapshot",
     "build_app",
+    "bundled_content_ref",
     "bundled_stage_catalog",
+    "content_ref_for",
     "integer_scale",
     "intent_from_held",
     "main",
+    "open_tcp_link",
+    "parse_endpoint",
     "present_rect",
     "stage_catalog",
     "stage_from_level",
+    "terrain_from_rows",
 ]

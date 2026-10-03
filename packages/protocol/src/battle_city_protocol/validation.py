@@ -21,6 +21,7 @@ from .errors import MessageError
 from .limits import (
     MAX_DETAIL_LENGTH,
     MAX_DIGEST_LENGTH,
+    MAX_DISPLAY_NAME_LENGTH,
     MAX_IDENTIFIER_LENGTH,
     MAX_TOKEN_LENGTH,
     MIN_TOKEN_LENGTH,
@@ -104,6 +105,29 @@ def require_token(field: str, value: object) -> str:
     if _TOKEN.fullmatch(value) is None:
         raise MessageError(
             RejectionCode.INVALID_FIELD, f"{field} must be printable ASCII without spaces"
+        )
+    return value
+
+
+def require_name(field: str, value: object) -> str:
+    """Return ``value`` as a bounded roster name.
+
+    A display name is the one string one player writes and another player reads, so it
+    is held to the identifier charset rather than to "printable": no spaces, no control
+    bytes, no direction marks, nothing that renders as something other than what it is.
+    It is shorter than an identifier because a roster column is narrow.
+    """
+    if not isinstance(value, str):
+        raise MessageError(RejectionCode.INVALID_FIELD, f"{field} must be a string")
+    if not value or len(value) > MAX_DISPLAY_NAME_LENGTH:
+        raise MessageError(
+            RejectionCode.INVALID_FIELD,
+            f"{field} must be 1 to {MAX_DISPLAY_NAME_LENGTH} characters",
+        )
+    if _IDENTIFIER.fullmatch(value) is None:
+        raise MessageError(
+            RejectionCode.INVALID_FIELD,
+            f"{field} must use letters, digits, '.', '_' or '-' and start and end alphanumeric",
         )
     return value
 

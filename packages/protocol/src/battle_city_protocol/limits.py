@@ -16,12 +16,30 @@ from __future__ import annotations
 
 from typing import Final
 
-PROTOCOL_VERSION: Final[int] = 1
+PROTOCOL_VERSION: Final[int] = 2
 """The wire version this package speaks.
 
 Every message carries it and every decode rejects a mismatch outright. Incompatible
 peers fail with :data:`~battle_city_protocol.codes.RejectionCode.PROTOCOL_VERSION_UNSUPPORTED`
 rather than attempting a best-effort parse, per the compatibility specification.
+
+Version 2 adds the lobby: the message set grew by eight types, and the set of types a
+server will accept from a client grew with it. The addition is backwards compatible in
+shape — no version 1 message changed a field — but the version still moves, because the
+version covers *the message set*, and a version 1 peer meeting a version 2 lobby would
+otherwise fail with
+:data:`~battle_city_protocol.codes.RejectionCode.UNKNOWN_MESSAGE_TYPE`, which says
+"this build has a bug" rather than "upgrade". The compatibility specification asks for
+an actionable failure, and a version mismatch is the only refusal that names the fix.
+"""
+
+MATCH_SETTINGS_VERSION: Final[int] = 1
+"""The layout version of :class:`~battle_city_protocol.messages.MatchSettings`.
+
+Competitive configuration has to be explicit and versioned wherever it is recorded, per
+the product specification, and a lobby negotiates it before a session exists. It is
+distinct from :data:`PROTOCOL_VERSION` because the settings record also travels in
+session and replay metadata, where the wire version has no meaning.
 """
 
 SNAPSHOT_VERSION: Final[int] = 1
@@ -106,6 +124,24 @@ stays independent of the simulation package.
 
 MAX_LIVES: Final[int] = 99
 MAX_KEYFRAME_INTERVAL: Final[int] = 3600
+
+MAX_LOBBY_MEMBERS: Final[int] = MAX_PLAYERS_PER_SNAPSHOT
+"""Members one lobby may hold. A lobby cannot be larger than a session it can start."""
+
+MAX_TEAM: Final[int] = 4
+"""Highest team number. Teams are one-based and are metadata until a mode uses them."""
+
+MAX_DISPLAY_NAME_LENGTH: Final[int] = 16
+"""Longest roster name. Names are shown to other players, so they stay short and plain."""
+
+MAX_LEVELS_PER_LOBBY: Final[int] = 32
+"""Levels one lobby may offer. The bound is on the advertisement, not on a pack."""
+
+MAX_MODES_PER_LOBBY: Final[int] = 8
+"""Modes one lobby may advertise. Wider than the published mode table, deliberately."""
+
+MAX_REVISION: Final[int] = (1 << 31) - 1
+"""Highest lobby settings revision. A revision rises by one per accepted change."""
 
 EVENT_VALUE_MIN: Final[int] = -(1 << 31)
 EVENT_VALUE_MAX: Final[int] = (1 << 31) - 1

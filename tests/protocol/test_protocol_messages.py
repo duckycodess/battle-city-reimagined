@@ -32,9 +32,25 @@ from protocol_helpers import (
     input_batch,
     join_request,
     keyframe,
+    lobby_configure,
+    lobby_join,
+    lobby_leave,
+    lobby_ready,
+    lobby_start,
     session_info,
     snapshot,
 )
+
+CLIENT_SAMPLES: list[ClientMessage] = [
+    join_request(),
+    input_batch(),
+    lobby_join(),
+    lobby_configure(),
+    lobby_ready(),
+    lobby_start(),
+    lobby_leave(),
+]
+"""One of each client message, annotated as the union so mypy checks the membership."""
 
 
 def test_message_type_sets_partition_the_enum() -> None:
@@ -42,9 +58,37 @@ def test_message_type_sets_partition_the_enum() -> None:
     assert not CLIENT_MESSAGE_TYPES & SERVER_MESSAGE_TYPES
 
 
-def test_client_messages_are_only_join_and_input() -> None:
-    """The union is the allowlist. Widening it is a deliberate, reviewable edit."""
-    assert {MessageType.JOIN_REQUEST, MessageType.INPUT_BATCH} == CLIENT_MESSAGE_TYPES
+def test_client_message_types_are_a_closed_allowlist() -> None:
+    """The union is the allowlist. Widening it is a deliberate, reviewable edit.
+
+    Protocol version 2 widened it once, by exactly the five lobby messages a client may
+    send. Nothing here lets a client describe state: the additions ask for a seat, agree
+    to a revision, propose settings, ask to start, and leave.
+    """
+    assert {
+        MessageType.JOIN_REQUEST,
+        MessageType.INPUT_BATCH,
+        MessageType.LOBBY_JOIN,
+        MessageType.LOBBY_CONFIGURE,
+        MessageType.LOBBY_READY,
+        MessageType.LOBBY_START,
+        MessageType.LOBBY_LEAVE,
+    } == CLIENT_MESSAGE_TYPES
+
+
+def test_server_message_types_are_a_closed_allowlist() -> None:
+    """The other half of the partition, named so a silent addition fails here too."""
+    assert {
+        MessageType.JOIN_ACCEPTED,
+        MessageType.INPUT_ACCEPTED,
+        MessageType.SNAPSHOT,
+        MessageType.TICK_EVENTS,
+        MessageType.REJECTED,
+        MessageType.SESSION_CLOSED,
+        MessageType.LOBBY_WELCOME,
+        MessageType.LOBBY_STATE,
+        MessageType.MATCH_STARTING,
+    } == SERVER_MESSAGE_TYPES
 
 
 def test_action_allowlist_excludes_authority() -> None:
@@ -54,11 +98,15 @@ def test_action_allowlist_excludes_authority() -> None:
 
 
 def test_client_messages_carry_no_authoritative_field() -> None:
-    """No client message may name score, seed, state, damage or entity placement."""
+    """No client message may name score, seed, state, damage or entity placement.
+
+    The lobby messages are held to the same rule as the gameplay ones. A host proposes
+    a mode and a level by identifier; it never proposes a grid, a seed or a result.
+    """
     forbidden = {"score", "seed", "rng", "state", "state_hash", "damage", "grid", "tanks"}
-    for message_type in (join_request(), input_batch()):
-        names = {field.name for field in dataclasses.fields(message_type)}
-        assert not names & forbidden
+    for message in CLIENT_SAMPLES:
+        names = {field.name for field in dataclasses.fields(message)}
+        assert not names & forbidden, f"{type(message).__name__} names {names & forbidden}"
 
 
 def test_rejection_code_values_are_stable() -> None:
@@ -68,6 +116,12 @@ def test_rejection_code_values_are_stable() -> None:
     assert RejectionCode.CONTENT_MISMATCH.value == "content_mismatch"
     assert RejectionCode.ILLEGAL_COMMAND.value == "illegal_command"
     assert RejectionCode.QUEUE_OVERFLOW.value == "queue_overflow"
+    assert RejectionCode.LOBBY_FULL.value == "lobby_full"
+    assert RejectionCode.NOT_HOST.value == "not_host"
+    assert RejectionCode.SETTINGS_STALE.value == "settings_stale"
+    assert RejectionCode.MEMBERS_NOT_READY.value == "members_not_ready"
+    assert RejectionCode.MODE_UNSUPPORTED.value == "mode_unsupported"
+    assert RejectionCode.STAGE_UNSUPPORTED.value == "stage_unsupported"
     assert len({code.value for code in RejectionCode}) == len(RejectionCode)
 
 
@@ -250,5 +304,14 @@ def test_detail_stays_printable_and_bounded() -> None:
 
 
 def test_client_message_union_is_what_the_helpers_build() -> None:
-    messages: list[ClientMessage] = [join_request(), input_batch()]
-    assert len(messages) == 2
+    """Every discriminator a client may send has a sample the type checker accepts."""
+    assert {type(message).__name__ for message in CLIENT_SAMPLES} == {
+        "JoinRequest",
+        "InputBatch",
+        "LobbyJoin",
+        "LobbyConfigure",
+        "LobbyReady",
+        "LobbyStart",
+        "LobbyLeave",
+    }
+    assert len(CLIENT_SAMPLES) == len(CLIENT_MESSAGE_TYPES)

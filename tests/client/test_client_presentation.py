@@ -12,7 +12,24 @@ from battle_city_client import (
     theme,
 )
 from battle_city_client.glyphs import GLYPHS, MISSING_GLYPH, glyph_rows, text_width
+from battle_city_client.online import OnlineConfig
 from battle_city_client.shell import ClientShell, Screen
+from battle_city_protocol import (
+    BaseSnapshot,
+    ContentRef,
+    JoinAccepted,
+    LobbyInfo,
+    LobbyMember,
+    LobbyState,
+    LobbyWelcome,
+    MatchMode,
+    MatchSettings,
+    MatchStarting,
+    PlayerSnapshot,
+    SessionInfo,
+    StateSnapshot,
+    TankSnapshot,
+)
 from battle_city_sim import (
     DEFAULT_RULES,
     Direction,
@@ -47,6 +64,124 @@ def _playing_shell() -> ClientShell:
     return shell
 
 
+# -- online fixtures ----------------------------------------------------------
+#
+# The online screens are reached by handing the shell the server messages that put it
+# there. No server runs here: `tests/multiplayer` drives the real one, and this file
+# only needs each screen to be *reachable* so the coverage assertion below stays total.
+
+_ONLINE_SESSION_ID = "session-1"
+_ONLINE_CONTENT = ContentRef(
+    pack_id="duo-pack", pack_version="1.0.0", level_id="duo-arena", content_schema_version=1
+)
+_ONLINE_GRID: tuple[str, ...] = ("0" * 16,) * 15 + ("0" * 8 + "8" + "0" * 7,)
+
+
+def _online_settings() -> MatchSettings:
+    return MatchSettings(
+        mode=MatchMode.COOP,
+        level_id="duo-arena",
+        content=_ONLINE_CONTENT,
+        tick_rate=60,
+        max_players=2,
+    )
+
+
+def _online_shell() -> ClientShell:
+    """A shell seated in a lobby with a two-member roster, as the server broadcast it."""
+    shell = make_shell()
+    shell.online_config = OnlineConfig(
+        endpoint="loopback:0",
+        session_id=_ONLINE_SESSION_ID,
+        ticket="ticket-host-aaaaaaaa",
+        display_name="ducky",
+        content=_ONLINE_CONTENT,
+    )
+    assert shell.open_online()
+    shell.receive(
+        LobbyWelcome(
+            session_id=_ONLINE_SESSION_ID,
+            slot=1,
+            host=True,
+            lobby=LobbyInfo(
+                capacity=2,
+                offered_modes=(MatchMode.COOP, MatchMode.FREE_FOR_ALL, MatchMode.TEAM_BATTLE),
+                playable_modes=(MatchMode.COOP,),
+                offered_levels=("duo-arena",),
+            ),
+        )
+    )
+    shell.receive(
+        LobbyState(
+            session_id=_ONLINE_SESSION_ID,
+            revision=1,
+            settings=_online_settings(),
+            members=(
+                LobbyMember(slot=1, display_name="ducky", ready=True, host=True, connected=True),
+                LobbyMember(slot=2, display_name="tj", ready=False, host=False, connected=True),
+            ),
+            host_slot=1,
+            startable=False,
+            blocked=None,
+        )
+    )
+    return shell
+
+
+def _online_playing_shell() -> ClientShell:
+    """The same shell after the server started the match and sent the first keyframe."""
+    shell = _online_shell()
+    session_info = SessionInfo(
+        tick_rate=60,
+        keyframe_interval=30,
+        max_players=2,
+        content=_ONLINE_CONTENT,
+        rules_digest="a" * 64,
+        state_version=1,
+    )
+    shell.receive(
+        MatchStarting(
+            session_id=_ONLINE_SESSION_ID,
+            slot=1,
+            token="token-slot-1-abcdef",
+            session=session_info,
+            settings=_online_settings(),
+        )
+    )
+    shell.receive(JoinAccepted(session_id=_ONLINE_SESSION_ID, slot=1, tick=0, session=session_info))
+    shell.receive(
+        StateSnapshot(
+            session_id=_ONLINE_SESSION_ID,
+            tick=0,
+            tick_rate=60,
+            state_version=1,
+            keyframe=True,
+            grid=_ONLINE_GRID,
+            tanks=(
+                TankSnapshot(
+                    entity_id=1,
+                    variant=0,
+                    x=64,
+                    y=160,
+                    facing=0,
+                    slot=1,
+                    gatling_ticks=0,
+                    invincible_ticks=0,
+                ),
+            ),
+            projectiles=(),
+            powerups=(),
+            players=(
+                PlayerSnapshot(slot=1, lives=3, tank_id=1, spawn_x=4, spawn_y=10),
+                PlayerSnapshot(slot=2, lives=3, tank_id=None, spawn_x=12, spawn_y=10),
+            ),
+            base=BaseSnapshot(cell_x=8, cell_y=15, destroyed=False),
+            state_hash="b" * 64,
+        )
+    )
+    return shell
+
+
 # -- screens ------------------------------------------------------------------
 
 
@@ -70,6 +205,10 @@ def test_every_screen_draws_something() -> None:
     over = make_shell()
     over.open_session(finished_session(RunOutcome.BASE_DESTROYED))
     frames[Screen.RUN_OVER] = _rendered(over)
+
+    lobby = _online_shell()
+    frames[Screen.ONLINE_LOBBY] = _rendered(lobby)
+    frames[Screen.ONLINE_PLAY] = _rendered(_online_playing_shell())
 
     assert set(frames) == set(Screen)
     for screen, surface in frames.items():

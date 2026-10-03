@@ -28,6 +28,7 @@ import argparse
 from collections.abc import Sequence
 
 import pygame
+from battle_city_protocol import ContentRef, MessageError
 from battle_city_sim import DEFAULT_RULES, Rules
 
 from . import theme
@@ -35,10 +36,12 @@ from .assets import AssetLibrary, ProceduralAssetLibrary
 from .display import Presenter, preferred_scale
 from .intents import Action, HeldActions
 from .keymap import edge_action_for, held_action_for
+from .netlink import NetworkLink, open_tcp_link, parse_endpoint
+from .online import OnlineConfig
 from .rendering import Renderer
 from .session import DEFAULT_SEED
-from .shell import ClientShell, Screen
-from .stage_adapter import StageAdapterError, bundled_stage_catalog
+from .shell import ClientShell
+from .stage_adapter import StageAdapterError, bundled_content_ref, bundled_stage_catalog
 from .timing import NOMINAL_TICK_RATE, FixedTickAccumulator
 
 DEFAULT_FRAME_CAP: int = 120
@@ -53,6 +56,9 @@ MAX_FRAME_CAP: int = 1000
 """Bounds for ``--frame-cap``. Zero means "never wait" to pygame, which is a busy spin."""
 
 WINDOW_CAPTION: str = "Battle City Reimagined"
+
+DEFAULT_DISPLAY_NAME: str = "player"
+"""Roster name used when the launch did not supply one. Bounded by the protocol."""
 
 
 class ClientApp:
@@ -74,6 +80,7 @@ class ClientApp:
         self.frame_cap = frame_cap
         self.held = HeldActions()
         self.clock = pygame.time.Clock()
+        self.link: NetworkLink | None = None
 
     # -- events ----------------------------------------------------------------
 
@@ -115,7 +122,7 @@ class ClientApp:
         happening but nothing is watching it.
         """
         screen = self.shell.screen
-        if screen is Screen.PLAYING:
+        if self.shell.drives_tank:
             held = held_action_for(key)
             if held is not None:
                 self.held.press(held)
@@ -128,7 +135,7 @@ class ClientApp:
             self.presenter.step_scale(-1)
         else:
             self.shell.handle(edge)
-            if self.shell.screen is not Screen.PLAYING:
+            if not self.shell.drives_tank:
                 self.held.clear()
 
     def _set_focused(self, focused: bool) -> None:
@@ -165,9 +172,62 @@ class ClientApp:
         if self.shell.consumes_ticks:
             ticks = self.accumulator.advance(elapsed_ms)
             self.shell.advance(ticks, self.held.intent())
-        if not self.shell.consumes_ticks:
+        if not self.shell.drives_tank:
             self._stop_driving()
         return ticks
+
+    # -- network ---------------------------------------------------------------
+
+    def pump_network(self) -> None:
+        """Open, drain and feed the link, once per frame.
+
+        Everything about *what* the messages mean happened before this method: the
+        shell holds the session, the session holds the rules about what it may say, and
+        this is the pump that moves bytes between them. It never advances a simulation
+        and never fabricates a message the session did not offer.
+        """
+        self._reconcile_link()
+        link = self.link
+        if link is None:
+            return
+        for message in link.poll():
+            self.shell.receive(message)
+        if not link.open:
+            self.shell.link_lost(link.failure or "")
+        if self.shell.drives_tank:
+            self.shell.pump_online(self.held.intent())
+        for outgoing in self.shell.take_outbox():
+            link.send(outgoing)
+
+    def _reconcile_link(self) -> None:
+        """Hold a link exactly while the shell is on an online screen.
+
+        The shell says which screen it is on; opening and closing a socket is this
+        layer's job. A link is never reopened after it fails: there is no reconnect in
+        this release, so a second dial would be a new connection with no claim on the
+        slot the first one held.
+        """
+        session = self.shell.online
+        if (
+            self.shell.wants_link
+            and self.link is None
+            and self.shell.online_config is not None
+            and session is not None
+            and session.live
+        ):
+            try:
+                self.link = open_tcp_link(self.shell.online_config.endpoint)
+            except (OSError, ValueError) as error:
+                # A session whose link could not be opened is over. Checking ``live``
+                # above is what stops the next frame trying again, and the one after
+                # that: a dial that failed for a reason the frame loop cannot change
+                # will fail the same way sixty times a second.
+                self.shell.link_lost(type(error).__name__.upper())
+            return
+        if not self.shell.wants_link and self.link is not None:
+            self.shell.take_outbox()
+            self.link.close()
+            self.link = None
 
     def draw(self) -> None:
         """Render the current shell state and show it."""
@@ -175,16 +235,26 @@ class ClientApp:
         self.presenter.present()
 
     def step(self, elapsed_ms: int) -> None:
-        """One whole frame: events, simulation, presentation."""
+        """One whole frame: events, network, simulation, presentation."""
         self.pump_events()
+        self.pump_network()
         self.advance_frame(elapsed_ms)
         self.draw()
 
     def run(self) -> None:
         """Loop until the shell stops running."""
         self.clock.tick(self.frame_cap)
-        while self.shell.running:
-            self.step(self.clock.tick(self.frame_cap))
+        try:
+            while self.shell.running:
+                self.step(self.clock.tick(self.frame_cap))
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        """Release the network link, if one is open. Idempotent."""
+        if self.link is not None:
+            self.link.close()
+            self.link = None
 
 
 def build_app(
@@ -194,13 +264,20 @@ def build_app(
     scale: int | None = None,
     frame_cap: int = DEFAULT_FRAME_CAP,
     assets: AssetLibrary | None = None,
+    online: OnlineConfig | None = None,
 ) -> ClientApp:
     """Load the bundled stages, open a window and wire the client together.
 
     A display must already be initialised. :func:`main` does that; a test does it with
     the dummy driver.
+
+    ``online`` is the lobby this client can reach, when it was given one. Without it the
+    online menu entry says what is missing rather than disappearing, because a build
+    that can play online and a launch that was not told where are two different things.
     """
-    shell = ClientShell(catalog=bundled_stage_catalog(), seed=seed, rules=rules)
+    shell = ClientShell(
+        catalog=bundled_stage_catalog(), seed=seed, rules=rules, online_config=online
+    )
     presenter = Presenter(
         scale=preferred_scale() if scale is None else scale, caption=WINDOW_CAPTION
     )
@@ -236,7 +313,85 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "(default: %(default)s)"
         ),
     )
+    parser.add_argument(
+        "--server",
+        default=None,
+        metavar="HOST:PORT",
+        help="lobby to join when ONLINE is chosen; without it ONLINE says what is missing",
+    )
+    parser.add_argument(
+        "--session",
+        default=None,
+        metavar="ID",
+        help="identifier of the session to join on that server",
+    )
+    parser.add_argument(
+        "--ticket",
+        default=None,
+        metavar="TICKET",
+        help="the lobby ticket issued for this player",
+    )
+    parser.add_argument(
+        "--name",
+        default=DEFAULT_DISPLAY_NAME,
+        metavar="NAME",
+        help="roster name other players see (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--content",
+        default=None,
+        metavar="PACK@VERSION/LEVEL#SCHEMA",
+        help="content this client claims to be running; the bundled pack by default",
+    )
     return parser.parse_args(argv)
+
+
+def online_config(options: argparse.Namespace) -> OnlineConfig | None:
+    """Build the online details from the launch options, or ``None`` when absent.
+
+    All three of the address, the session and the ticket are required together: two of
+    them describe a lobby this client cannot prove it belongs to, which is a launch
+    mistake worth naming rather than a half-configured online mode.
+    """
+    supplied = (options.server, options.session, options.ticket)
+    if not any(supplied):
+        return None
+    if not all(supplied):
+        raise ValueError("--server, --session and --ticket are required together")
+    parse_endpoint(options.server)
+    content = (
+        bundled_content_ref() if options.content is None else parse_content_ref(options.content)
+    )
+    return OnlineConfig(
+        endpoint=options.server,
+        session_id=options.session,
+        ticket=options.ticket,
+        display_name=options.name,
+        content=content,
+    )
+
+
+def parse_content_ref(value: str) -> ContentRef:
+    """Parse ``pack@version/level#schema``, the spelling the server's logs use.
+
+    One spelling for both sides means a mismatch can be read straight off a log line
+    and pasted back in, instead of being reassembled from four separate flags.
+    """
+    pack, separator, rest = value.partition("@")
+    version, slash, remainder = rest.partition("/")
+    level, hash_mark, schema = remainder.partition("#")
+    if not (separator and slash and hash_mark):
+        raise ValueError(f"expected PACK@VERSION/LEVEL#SCHEMA, found {value!r}")
+    try:
+        schema_version = int(schema)
+    except ValueError:
+        raise ValueError(f"{schema!r} is not a content schema version") from None
+    return ContentRef(
+        pack_id=pack,
+        pack_version=version,
+        level_id=level,
+        content_schema_version=schema_version,
+    )
 
 
 def _frame_cap(value: str) -> int:
@@ -268,13 +423,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     options = parse_args(argv)
     try:
+        online = online_config(options)
+    except (ValueError, MessageError) as error:
+        print(f"battle_city_client: {error}")
+        return 1
+    try:
         pygame.display.init()
     except pygame.error as error:
         print(f"battle_city_client: no usable display: {error}")
         return 2
     try:
         try:
-            app = build_app(seed=options.seed, scale=options.scale, frame_cap=options.frame_cap)
+            app = build_app(
+                seed=options.seed,
+                scale=options.scale,
+                frame_cap=options.frame_cap,
+                online=online,
+            )
         except StageAdapterError as error:
             print(f"battle_city_client: {error}")
             return 1

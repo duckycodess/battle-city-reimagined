@@ -1,9 +1,15 @@
 """What a session is, decided before anyone connects.
 
-There is no lobby in this release. A session's identifier, its stage, its content, its
-rules, its seed and its per-slot tokens are arranged out of band and handed to the
-server as one frozen value. Joining therefore proves membership rather than creating
-it, and nothing a client sends can change any of it.
+A session's identifier, its stage, its content, its rules, its seed and its per-slot
+tokens are decided before anyone connects and handed to the server as one frozen value.
+Joining therefore proves membership rather than creating it, and nothing a client sends
+can change any of it.
+
+Where that value comes from is somebody else's problem, deliberately. A deployment may
+write one by hand; a :class:`~battle_city_server.lobby.Lobby` builds one from a roster
+that agreed to it and mints the credentials to go with it. Neither route can reach
+inside a running session, which is why this record is frozen and why the session reads
+nothing else.
 
 Every limit a client can push against lives in :class:`SessionLimits`, named and
 bounded, so a deployment can tighten one without editing session logic.

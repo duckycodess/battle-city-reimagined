@@ -7,8 +7,10 @@ from typing import Any
 
 import pytest
 from battle_city_protocol import (
+    CLIENT_MESSAGE_TYPES,
     MAX_FRAME_BYTES,
     PROTOCOL_VERSION,
+    SERVER_MESSAGE_TYPES,
     ClientMessage,
     EventKind,
     GameEvent,
@@ -32,6 +34,14 @@ from protocol_helpers import (
     join_accepted,
     join_request,
     keyframe,
+    lobby_configure,
+    lobby_join,
+    lobby_leave,
+    lobby_ready,
+    lobby_start,
+    lobby_state,
+    lobby_welcome,
+    match_starting,
     snapshot,
     tick_events,
 )
@@ -46,7 +56,15 @@ def reencode(body: dict[str, Any]) -> bytes:
     return json.dumps(body).encode()
 
 
-CLIENT_MESSAGES: list[ClientMessage] = [join_request(), input_batch()]
+CLIENT_MESSAGES: list[ClientMessage] = [
+    join_request(),
+    input_batch(),
+    lobby_join(),
+    lobby_configure(),
+    lobby_ready(),
+    lobby_start(),
+    lobby_leave(),
+]
 SERVER_MESSAGES: list[ServerMessage] = [
     join_accepted(),
     InputAccepted(session_id=SESSION_ID, slot=1, sequence=4, tick=12),
@@ -58,6 +76,9 @@ SERVER_MESSAGES: list[ServerMessage] = [
     ),
     Rejected(session_id=SESSION_ID, code=RejectionCode.WRONG_PLAYER, detail="slot 2", sequence=4),
     SessionClosed(session_id=SESSION_ID, code=RejectionCode.QUEUE_OVERFLOW, detail="slow"),
+    lobby_welcome(),
+    lobby_state(),
+    match_starting(),
 ]
 
 
@@ -72,8 +93,15 @@ def test_server_messages_round_trip(message: ServerMessage) -> None:
 
 
 def test_every_message_type_is_covered_by_the_round_trip_set() -> None:
+    """A new message type fails here until a sample of it round trips above."""
     covered = {message_type_of(message) for message in CLIENT_MESSAGES + SERVER_MESSAGES}
     assert covered == set(MessageType)
+
+
+def test_the_round_trip_samples_sit_on_the_side_they_claim() -> None:
+    """Each sample is exercised in the direction its discriminator is allowed to travel."""
+    assert {message_type_of(message) for message in CLIENT_MESSAGES} == CLIENT_MESSAGE_TYPES
+    assert {message_type_of(message) for message in SERVER_MESSAGES} == SERVER_MESSAGE_TYPES
 
 
 def test_encoding_is_deterministic() -> None:
