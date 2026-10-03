@@ -625,7 +625,11 @@ class Renderer:
         if board is None:
             self._draw_online_waiting(surface, session)
             return
-        self._draw_remote_playfield(surface, board)
+        # The playfield is drawn from the interpolated view and the HUD from the newest
+        # snapshot. The numbers a player reads -- tick, lives, state hash -- are the
+        # server's latest word and are never a blend of two of them.
+        drawn = session.render_board
+        self._draw_remote_playfield(surface, board if drawn is None else drawn)
         self._draw_remote_hud(surface, session, board)
         if session.phase is OnlinePhase.ENDED:
             self._draw_online_ended_overlay(surface, session)
