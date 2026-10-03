@@ -127,6 +127,17 @@ class GamepadHub:
         self._axes = {key: value for key, value in self._axes.items() if key[0] != instance}
         self._hats = {key: value for key, value in self._hats.items() if key[0] != instance}
 
+    def forget_all_readings(self) -> None:
+        """Drop every remembered axis and hat position, on every device.
+
+        Used when the window loses focus. Deliberately not "every open pad": SDL
+        delivers events for a device from the moment it reports one, and this hub reads
+        a reading whether or not it got to open the pad behind it, so a readings table
+        keyed off the open ones would miss exactly the device nobody opened.
+        """
+        self._axes.clear()
+        self._hats.clear()
+
     def close(self) -> None:
         """Release every pad. Idempotent."""
         for instance in tuple(self._pads):

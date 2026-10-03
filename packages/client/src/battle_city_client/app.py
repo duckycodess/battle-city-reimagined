@@ -319,8 +319,7 @@ class ClientApp:
         """
         self.held.clear()
         self.repeat.clear()
-        for device in self.gamepads.devices:
-            self.gamepads.forget_readings(device)
+        self.gamepads.forget_all_readings()
 
     def _stop_driving(self) -> None:
         """Drop banked wall time and held keys together.

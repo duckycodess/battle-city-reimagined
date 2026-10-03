@@ -65,6 +65,14 @@ MARGIN: int = 8
 BADGE_HUD_OFFSET: int = 22
 """Gap between the base readout and the badge line, clearing the base sprite."""
 
+MAIN_MENU_TOP: int = 128
+"""Where the main menu's first entry sits.
+
+Measured from the entries rather than fixed beneath them: the notices under the menu and
+the hint at the foot are placed from this and from the number of entries, so adding an
+entry moves what is below it instead of being written over by it.
+"""
+
 OPTIONS_PANEL_TOP: int = 34
 OPTIONS_LEFT_WIDTH: int = 184
 OPTIONS_PANEL_HEIGHT: int = 130
@@ -267,16 +275,23 @@ class Renderer:
         self.text_centered(surface, TITLE, center_x, 44, self._palette.accent, 4)
         self.text_centered(surface, SUBTITLE, center_x, 84, self._palette.text, 2)
         labels = [MAIN_MENU_LABELS[item] for item in MainMenuItem]
-        self._menu(surface, labels, shell.main_index, center_x, 140)
+        self._menu(surface, labels, shell.main_index, center_x, MAIN_MENU_TOP)
+        below = MAIN_MENU_TOP + len(labels) * line_step(2) + 2
         if shell.notice:
-            self.text_centered(surface, shell.notice, center_x, 214, self._palette.danger)
+            self.text_centered(surface, shell.notice, center_x, below, self._palette.danger)
         recovery = shell.profile.recovery_notice
         if recovery:
             # Said once, on the first screen, rather than left for the player to discover
             # when their progress turns out not to be there.
-            self.text_centered(surface, recovery[:46], center_x, 226, self._palette.danger)
+            self.text_centered(
+                surface, recovery[:46], center_x, below + line_step(), self._palette.danger
+            )
         self.text_centered(
-            surface, "ARROWS OR WASD - ENTER SELECTS", center_x, 240, self._palette.text_dim
+            surface,
+            "ARROWS OR WASD - ENTER SELECTS",
+            center_x,
+            theme.LOGICAL_SIZE[1] - MARGIN - GLYPH_HEIGHT,
+            self._palette.text_dim,
         )
 
     def _draw_stage_select(self, surface: pygame.Surface, shell: ClientShell) -> None:
