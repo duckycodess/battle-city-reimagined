@@ -29,6 +29,7 @@ from .codes import RejectionCode
 from .errors import MessageError
 from .events import GameEvent
 from .limits import (
+    MATCH_SETTINGS_VERSION,
     MAX_ACTIONS_PER_BATCH,
     MAX_COORDINATE,
     MAX_ENTITY_ID,
@@ -36,13 +37,18 @@ from .limits import (
     MAX_EVENTS_PER_MESSAGE,
     MAX_GRID_DIMENSION,
     MAX_KEYFRAME_INTERVAL,
+    MAX_LEVELS_PER_LOBBY,
     MAX_LIVES,
+    MAX_LOBBY_MEMBERS,
+    MAX_MODES_PER_LOBBY,
     MAX_PLAYERS_PER_SNAPSHOT,
     MAX_POWERUPS_PER_SNAPSHOT,
     MAX_PROJECTILES_PER_SNAPSHOT,
+    MAX_REVISION,
     MAX_SEQUENCE,
     MAX_SLOT,
     MAX_TANKS_PER_SNAPSHOT,
+    MAX_TEAM,
     MAX_TICK,
     MAX_TICK_RATE,
     PROTOCOL_VERSION,
@@ -54,6 +60,7 @@ from .validation import (
     require_digest,
     require_identifier,
     require_int,
+    require_name,
     require_optional_int,
     require_token,
 )
@@ -70,6 +77,14 @@ class MessageType(StrEnum):
     TICK_EVENTS = "tick_events"
     REJECTED = "rejected"
     SESSION_CLOSED = "session_closed"
+    LOBBY_JOIN = "lobby_join"
+    LOBBY_CONFIGURE = "lobby_configure"
+    LOBBY_READY = "lobby_ready"
+    LOBBY_START = "lobby_start"
+    LOBBY_LEAVE = "lobby_leave"
+    LOBBY_WELCOME = "lobby_welcome"
+    LOBBY_STATE = "lobby_state"
+    MATCH_STARTING = "match_starting"
 
 
 class ActionKind(StrEnum):
@@ -175,6 +190,159 @@ class SessionInfo:
         _require_snapshot_version("session.snapshot_version", self.snapshot_version)
 
 
+class MatchMode(StrEnum):
+    """What a match is for. Member values are wire constants and never change.
+
+    The mode is chosen in the lobby and travels in the match settings, so a session and
+    a replay both record which rules a run was configured for. A mode supplies validated
+    configuration to the shared simulation; it never forks its rules.
+    """
+
+    COOP = "coop"
+    """Players share one side and defend one base together. Playable in this build."""
+
+    FREE_FOR_ALL = "free_for_all"
+    """Every player against every other. Configurable here; not startable yet."""
+
+    TEAM_BATTLE = "team_battle"
+    """Teams against each other. Configurable here; not startable yet."""
+
+
+COMPETITIVE_MODES: Final[frozenset[MatchMode]] = frozenset(
+    {MatchMode.FREE_FOR_ALL, MatchMode.TEAM_BATTLE}
+)
+"""Modes in which players fight each other rather than a shared opponent.
+
+They are named, configurable and versioned on the wire so a lobby can describe one
+honestly. Whether a given build can *run* one is a separate question that the server
+answers with :attr:`LobbyInfo.playable_modes`: the shared simulation currently has one
+player faction, no player-versus-player damage and no competitive result, so a server
+refuses to start a competitive match with
+:data:`~battle_city_protocol.codes.RejectionCode.MODE_UNSUPPORTED` rather than running a
+co-op match and calling it a duel. Making these modes selectable without making them
+fake is the point: the metadata is real, the refusal is explicit, and nothing in the
+protocol lets a client or a server claim a competitive result it did not produce.
+"""
+
+TEAM_MODES: Final[frozenset[MatchMode]] = frozenset({MatchMode.TEAM_BATTLE})
+"""Modes in which a roster entry carries a team. Everywhere else a team is absent."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MatchSettings:
+    """The configuration a lobby agreed on, explicit and versioned.
+
+    The product specification requires competitive configuration to be explicit,
+    versioned and carried in session and replay metadata. This record is that
+    configuration for every mode, not only the competitive ones, because a co-op run
+    recorded without its mode and its content is a run nobody can reproduce.
+
+    ``cheats_enabled`` is stated rather than implied. The legacy cheats are campaign
+    conveniences; a competitive match must not carry them, which is checked here rather
+    than trusted to a server.
+    """
+
+    mode: MatchMode
+    level_id: str
+    content: ContentRef
+    tick_rate: int
+    max_players: int
+    cheats_enabled: bool = False
+    settings_version: int = MATCH_SETTINGS_VERSION
+
+    def __post_init__(self) -> None:
+        _require_settings_version("settings.settings_version", self.settings_version)
+        require_identifier("settings.level_id", self.level_id)
+        require_int("settings.tick_rate", self.tick_rate, minimum=1, maximum=MAX_TICK_RATE)
+        require_int("settings.max_players", self.max_players, minimum=1, maximum=MAX_LOBBY_MEMBERS)
+        require_bool("settings.cheats_enabled", self.cheats_enabled)
+        if self.cheats_enabled and self.mode in COMPETITIVE_MODES:
+            raise MessageError(
+                RejectionCode.INVALID_FIELD,
+                f"settings.cheats_enabled must be false in {self.mode.value}",
+            )
+
+    @property
+    def competitive(self) -> bool:
+        """Whether this configuration describes players fighting each other."""
+        return self.mode in COMPETITIVE_MODES
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TeamAssignment:
+    """One host decision about which team a slot plays for."""
+
+    slot: int
+    team: int
+
+    def __post_init__(self) -> None:
+        require_int("teams.slot", self.slot, minimum=1, maximum=MAX_SLOT)
+        require_int("teams.team", self.team, minimum=1, maximum=MAX_TEAM)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LobbyMember:
+    """One roster entry, as every member of the lobby sees it.
+
+    Note what is absent: there is no token field here, and there is no field a token
+    could travel in. The roster is the one lobby message that is broadcast, so a
+    credential in it would be a credential handed to every other player. Membership
+    secrets are only ever sent to the connection they belong to, in
+    :class:`MatchStarting`.
+    """
+
+    slot: int
+    display_name: str
+    ready: bool
+    host: bool
+    connected: bool
+    team: int | None = None
+
+    def __post_init__(self) -> None:
+        require_int("members.slot", self.slot, minimum=1, maximum=MAX_SLOT)
+        require_name("members.display_name", self.display_name)
+        require_bool("members.ready", self.ready)
+        require_bool("members.host", self.host)
+        require_bool("members.connected", self.connected)
+        require_optional_int("members.team", self.team, minimum=1, maximum=MAX_TEAM)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LobbyInfo:
+    """What a lobby can be asked for, told to a member as it arrives.
+
+    ``offered_modes`` is what the lobby will let a host select. ``playable_modes`` is
+    the subset this server will actually start, and it is a separate field on purpose:
+    a client that shows the difference tells a player the truth about the build in front
+    of them, rather than offering a mode that fails at the last step with no explanation.
+    """
+
+    capacity: int
+    offered_modes: tuple[MatchMode, ...]
+    playable_modes: tuple[MatchMode, ...]
+    offered_levels: tuple[str, ...]
+    settings_version: int = MATCH_SETTINGS_VERSION
+
+    def __post_init__(self) -> None:
+        _require_settings_version("lobby.settings_version", self.settings_version)
+        require_int("lobby.capacity", self.capacity, minimum=1, maximum=MAX_LOBBY_MEMBERS)
+        _require_count("lobby.offered_modes", len(self.offered_modes), MAX_MODES_PER_LOBBY)
+        _require_count("lobby.playable_modes", len(self.playable_modes), MAX_MODES_PER_LOBBY)
+        _require_count("lobby.offered_levels", len(self.offered_levels), MAX_LEVELS_PER_LOBBY)
+        if not self.offered_modes:
+            raise MessageError(RejectionCode.INVALID_FIELD, "lobby.offered_modes must not be empty")
+        if not self.offered_levels:
+            raise MessageError(
+                RejectionCode.INVALID_FIELD, "lobby.offered_levels must not be empty"
+            )
+        for level_id in self.offered_levels:
+            require_identifier("lobby.offered_levels", level_id)
+        if not set(self.playable_modes) <= set(self.offered_modes):
+            raise MessageError(
+                RejectionCode.INVALID_FIELD, "lobby.playable_modes must be offered modes"
+            )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TankSnapshot:
     """A tank as the server sees it. ``variant`` and ``facing`` are canonical codes."""
@@ -271,8 +439,10 @@ class BaseSnapshot:
 class JoinRequest:
     """A client asking to take a preconfigured slot with the token it was issued.
 
-    There is no lobby here. Sessions, slots and tokens are arranged out of band, so
-    joining proves membership rather than creating it.
+    The slot and the token were arranged before this message: by a deployment, or by the
+    lobby that just sent this client its :class:`MatchStarting`. Either way joining
+    proves membership rather than creating it, and the server decides what the claim is
+    worth.
     """
 
     session_id: str
@@ -491,18 +661,257 @@ class SessionClosed:
         require_detail("detail", self.detail)
 
 
-type ClientMessage = JoinRequest | InputBatch
-"""Everything a client may send. Note what is not here: state, score, seed, terrain."""
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LobbyJoin:
+    """A client asking for a seat in a lobby, with the ticket it was issued.
+
+    A lobby is bounded and admission is proved, not assumed: a ticket is arranged out of
+    band exactly as a session credential was before there was a lobby, and the server
+    decides which slot the ticket takes. The client never names its own slot here, so a
+    client cannot choose to be player one by saying so.
+
+    ``team`` is a request and nothing more. The host owns team assignment; the server
+    records a preference only when the mode uses teams and the number is free.
+    """
+
+    session_id: str
+    ticket: str
+    display_name: str
+    content: ContentRef
+    team: int | None = None
+    protocol_version: int = PROTOCOL_VERSION
+
+    def __post_init__(self) -> None:
+        _require_protocol_version(self.protocol_version)
+        require_identifier("session_id", self.session_id)
+        require_token("ticket", self.ticket)
+        require_name("display_name", self.display_name)
+        require_optional_int("team", self.team, minimum=1, maximum=MAX_TEAM)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LobbyConfigure:
+    """The host choosing the mode, the stage and the team assignments.
+
+    ``revision`` is the settings revision the host was looking at. A configuration
+    built against a roster that has since changed is refused with
+    :data:`~battle_city_protocol.codes.RejectionCode.SETTINGS_STALE` rather than applied
+    to a lobby nobody agreed to.
+    """
+
+    session_id: str
+    slot: int
+    revision: int
+    mode: MatchMode
+    level_id: str
+    teams: tuple[TeamAssignment, ...] = ()
+    protocol_version: int = PROTOCOL_VERSION
+
+    def __post_init__(self) -> None:
+        _require_protocol_version(self.protocol_version)
+        require_identifier("session_id", self.session_id)
+        require_int("slot", self.slot, minimum=1, maximum=MAX_SLOT)
+        require_int("revision", self.revision, minimum=0, maximum=MAX_REVISION)
+        require_identifier("level_id", self.level_id)
+        _require_count("teams", len(self.teams), MAX_LOBBY_MEMBERS)
+        seen: set[int] = set()
+        for assignment in self.teams:
+            if assignment.slot in seen:
+                raise MessageError(
+                    RejectionCode.INVALID_FIELD,
+                    f"teams names slot {assignment.slot} twice",
+                )
+            seen.add(assignment.slot)
+        if self.teams and self.mode not in TEAM_MODES:
+            raise MessageError(
+                RejectionCode.INVALID_FIELD,
+                f"teams has no meaning in {self.mode.value}",
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LobbyReady:
+    """A member agreeing, or withdrawing agreement, to a specific settings revision.
+
+    Readiness is content agreement. It names the revision it agreed to, so a host that
+    changes the stage underneath a ready member does not inherit that member's consent.
+    """
+
+    session_id: str
+    slot: int
+    revision: int
+    ready: bool
+    protocol_version: int = PROTOCOL_VERSION
+
+    def __post_init__(self) -> None:
+        _require_protocol_version(self.protocol_version)
+        require_identifier("session_id", self.session_id)
+        require_int("slot", self.slot, minimum=1, maximum=MAX_SLOT)
+        require_int("revision", self.revision, minimum=0, maximum=MAX_REVISION)
+        require_bool("ready", self.ready)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LobbyStart:
+    """The host asking to start the match on the revision it names."""
+
+    session_id: str
+    slot: int
+    revision: int
+    protocol_version: int = PROTOCOL_VERSION
+
+    def __post_init__(self) -> None:
+        _require_protocol_version(self.protocol_version)
+        require_identifier("session_id", self.session_id)
+        require_int("slot", self.slot, minimum=1, maximum=MAX_SLOT)
+        require_int("revision", self.revision, minimum=0, maximum=MAX_REVISION)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LobbyLeave:
+    """A member leaving the lobby on purpose, which is not the same as vanishing.
+
+    A graceful departure frees the seat immediately and tells everyone why the roster
+    changed. A dropped connection reaches the same place, a little later and without the
+    explanation; both are handled, and neither pauses anything.
+    """
+
+    session_id: str
+    slot: int
+    protocol_version: int = PROTOCOL_VERSION
+
+    def __post_init__(self) -> None:
+        _require_protocol_version(self.protocol_version)
+        require_identifier("session_id", self.session_id)
+        require_int("slot", self.slot, minimum=1, maximum=MAX_SLOT)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LobbyWelcome:
+    """A seat granted, with the slot it carries and what this lobby can be asked for.
+
+    Sent to the arriving connection alone. The roster that follows is broadcast; this is
+    not, because it says which slot *you* are, and because a client needs to know what
+    the server will agree to before it offers a player a choice.
+    """
+
+    session_id: str
+    slot: int
+    host: bool
+    lobby: LobbyInfo
+    protocol_version: int = PROTOCOL_VERSION
+
+    def __post_init__(self) -> None:
+        _require_protocol_version(self.protocol_version)
+        require_identifier("session_id", self.session_id)
+        require_int("slot", self.slot, minimum=1, maximum=MAX_SLOT)
+        require_bool("host", self.host)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LobbyState:
+    """The whole lobby as the server sees it: settings, roster and whether it can start.
+
+    This is the only broadcast lobby message, and it carries no secret. ``startable``
+    and ``blocked`` together are the server's answer to "may we go now?", given before
+    anyone presses start: a client can show *why* not, and a competitive mode this build
+    will not run says so in the lobby rather than at the last moment.
+    """
+
+    session_id: str
+    revision: int
+    settings: MatchSettings
+    members: tuple[LobbyMember, ...]
+    host_slot: int
+    startable: bool
+    blocked: RejectionCode | None = None
+    protocol_version: int = PROTOCOL_VERSION
+
+    def __post_init__(self) -> None:
+        _require_protocol_version(self.protocol_version)
+        require_identifier("session_id", self.session_id)
+        require_int("revision", self.revision, minimum=0, maximum=MAX_REVISION)
+        require_int("host_slot", self.host_slot, minimum=1, maximum=MAX_SLOT)
+        require_bool("startable", self.startable)
+        _require_count("members", len(self.members), MAX_LOBBY_MEMBERS)
+        seen: set[int] = set()
+        for member in self.members:
+            if member.slot in seen:
+                raise MessageError(
+                    RejectionCode.INVALID_FIELD, f"members names slot {member.slot} twice"
+                )
+            seen.add(member.slot)
+        if self.startable and self.blocked is not None:
+            raise MessageError(
+                RejectionCode.INVALID_FIELD, "a startable lobby must not name a blocking reason"
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MatchStarting:
+    """The match is beginning, and this is your credential for it.
+
+    Sent to one connection only, because it carries that slot's membership token. The
+    token is the same kind of secret a session credential always was: it proves
+    membership of the session the lobby just created, and it is never logged, never
+    echoed into a rejection and never broadcast.
+
+    The settings travel with it so that the agreement the lobby reached is recorded in
+    the session a client is about to join, not only in the lobby that has now ended.
+    """
+
+    session_id: str
+    slot: int
+    token: str
+    session: SessionInfo
+    settings: MatchSettings
+    protocol_version: int = PROTOCOL_VERSION
+
+    def __post_init__(self) -> None:
+        _require_protocol_version(self.protocol_version)
+        require_identifier("session_id", self.session_id)
+        require_int("slot", self.slot, minimum=1, maximum=MAX_SLOT)
+        require_token("token", self.token)
+
+
+type ClientMessage = (
+    JoinRequest | InputBatch | LobbyJoin | LobbyConfigure | LobbyReady | LobbyStart | LobbyLeave
+)
+"""Everything a client may send. Note what is not here: state, score, seed, terrain.
+
+The lobby additions keep that property. A client may ask for a seat, agree to settings,
+and — if it is the host — propose settings and ask to start. It cannot name its own slot
+at join, cannot mint a token and cannot declare a result. The team it may name in a join
+is a request the server answers rather than a field it copies: granted only where the
+mode uses teams and nothing else holds that number, and the host's assignment overrides
+it either way.
+"""
 
 type ServerMessage = (
-    JoinAccepted | InputAccepted | StateSnapshot | TickEvents | Rejected | SessionClosed
+    JoinAccepted
+    | InputAccepted
+    | StateSnapshot
+    | TickEvents
+    | Rejected
+    | SessionClosed
+    | LobbyWelcome
+    | LobbyState
+    | MatchStarting
 )
 """Everything a server may send."""
 
 type Message = ClientMessage | ServerMessage
 
 CLIENT_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
-    {MessageType.JOIN_REQUEST, MessageType.INPUT_BATCH}
+    {
+        MessageType.JOIN_REQUEST,
+        MessageType.INPUT_BATCH,
+        MessageType.LOBBY_JOIN,
+        MessageType.LOBBY_CONFIGURE,
+        MessageType.LOBBY_READY,
+        MessageType.LOBBY_START,
+        MessageType.LOBBY_LEAVE,
+    }
 )
 """Discriminators a server will decode. Everything else from a client is refused."""
 
@@ -514,6 +923,9 @@ SERVER_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         MessageType.TICK_EVENTS,
         MessageType.REJECTED,
         MessageType.SESSION_CLOSED,
+        MessageType.LOBBY_WELCOME,
+        MessageType.LOBBY_STATE,
+        MessageType.MATCH_STARTING,
     }
 )
 """Discriminators a client will decode. The two sets are disjoint and cover the enum."""
@@ -535,6 +947,15 @@ def _require_snapshot_version(field: str, value: int) -> None:
         raise MessageError(
             RejectionCode.PROTOCOL_VERSION_UNSUPPORTED,
             f"this build reads snapshot version {SNAPSHOT_VERSION}, peer sent {value}",
+        )
+
+
+def _require_settings_version(field: str, value: int) -> None:
+    require_int(field, value, minimum=1, maximum=MAX_ENUM_CODE)
+    if value != MATCH_SETTINGS_VERSION:
+        raise MessageError(
+            RejectionCode.PROTOCOL_VERSION_UNSUPPORTED,
+            f"this build reads match settings version {MATCH_SETTINGS_VERSION}, peer sent {value}",
         )
 
 

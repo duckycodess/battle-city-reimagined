@@ -62,6 +62,7 @@ from battle_city_protocol import (
 )
 from battle_city_sim import SimulationState
 
+from .authority import SessionAuthority
 from .clock import TickClock
 from .config import SessionConfig
 from .logs import content_label, log_event, session_logger
@@ -85,6 +86,7 @@ class _Connection:
         "join_deadline",
         "closing",
         "finished",
+        "held_slot",
         "identifier",
         "outbound",
         "shutdown",
@@ -99,23 +101,48 @@ class _Connection:
         self.finished = False
         self.attempts = 0
         self.join_deadline = 0.0
+        self.held_slot = False
+        """Whether this connection held a slot the last time anything looked.
+
+        Kept on the connection rather than in the reader because the reader is not the
+        only thing that looks, and is not reliably the first: a connection parked in a
+        read is not looking at all. It is what makes "this connection just became a
+        stranger again" a fact about the connection instead of a local variable in
+        whichever coroutine happened to notice.
+        """
         self.writer: asyncio.Task[None] | None = None
         self.shutdown: asyncio.Task[None] | None = None
 
 
 class SessionServer:
-    """Runs one authoritative session over any number of connected channels."""
+    """Runs one authoritative session over any number of connected channels.
+
+    The authority is injected rather than built, because there are now two kinds. Handed
+    a :class:`~battle_city_server.config.SessionConfig` it runs a bare game session, the
+    way it always did; handed a
+    :class:`~battle_city_server.lobby.MatchSession` it runs a lobby that becomes one.
+    Nothing in this class can tell the difference, which is the point: sockets, queues
+    and deadlines belong here, and every rule belongs on the other side of
+    :class:`~battle_city_server.authority.SessionAuthority`.
+    """
 
     def __init__(
-        self, config: SessionConfig, *, flush_timeout: float = DEFAULT_FLUSH_TIMEOUT
+        self,
+        session: SessionConfig | SessionAuthority,
+        *,
+        flush_timeout: float = DEFAULT_FLUSH_TIMEOUT,
     ) -> None:
-        self._session = GameSession(config)
+        self._session: SessionAuthority = (
+            GameSession(session) if isinstance(session, SessionConfig) else session
+        )
         self._connections: dict[int, _Connection] = {}
         self._flush_timeout = flush_timeout
         self._log = session_logger()
+        self._ticking = asyncio.Event()
+        self._wake()
 
     @property
-    def session(self) -> GameSession:
+    def session(self) -> SessionAuthority:
         """The authority. Tests and diagnostics read it; nothing else should drive it."""
         return self._session
 
@@ -137,7 +164,7 @@ class SessionServer:
         Transports build their channels through here so none of them can forget the
         deadline. A channel built without one would read a half-sent frame for ever.
         """
-        deadline = self._session.config.limits.frame_deadline_seconds
+        deadline = self._session.limits.frame_deadline_seconds
 
         async def guard(read: Awaitable[bytes]) -> bytes:
             return await asyncio.wait_for(read, deadline)
@@ -146,13 +173,14 @@ class SessionServer:
 
     async def serve(self, channel: ServerChannel) -> None:
         """Serve one client until its channel ends. Intended to be run as a task."""
-        limits = self._session.config.limits
+        limits = self._session.limits
         if len(self._connections) >= limits.max_connections:
             await self._refuse(channel, RejectionCode.TOO_MANY_CONNECTIONS)
             return
 
         connection = _Connection(self._session.connect(), channel, limits.max_outbound_messages)
         connection.join_deadline = asyncio.get_running_loop().time() + limits.join_deadline_seconds
+        connection.held_slot = self._session.slot_of(connection.identifier) is not None
         self._connections[connection.identifier] = connection
         connection.writer = asyncio.create_task(self._write_loop(connection))
         self._log_connection("connection_opened", connection)
@@ -180,12 +208,23 @@ class SessionServer:
             return
         for reply in replies:
             self._deliver(reply)
+        self._sweep_join_deadlines()
         await asyncio.sleep(0)
 
     async def run(self, clock: TickClock, *, ticks: int | None = None) -> None:
-        """Advance ticks on ``clock`` until the session closes or ``ticks`` have run."""
+        """Advance ticks on ``clock`` until the session closes or ``ticks`` have run.
+
+        An authority that is not ticking yet — a lobby, still deciding — is waited on
+        rather than polled. Asking a fixed-rate clock for tick zero over and over would
+        burn a core deciding that tick zero is still not due, and would count catch-up
+        against a run that has not begun.
+        """
         advanced = 0
         while not self._session.closed and (ticks is None or advanced < ticks):
+            if not self._session.ticking:
+                await self._ticking.wait()
+                self._ticking.clear()
+                continue
             await clock.wait_for_tick(self._session.tick)
             await self.advance_tick()
             advanced += 1
@@ -196,6 +235,7 @@ class SessionServer:
         """End the session and close every connection, telling each one why."""
         for reply in self._session.close(code, detail):
             self._deliver(reply)
+        self._wake()
         connections = list(self._connections.values())
         for connection in connections:
             connection.closing = True
@@ -210,9 +250,9 @@ class SessionServer:
         await channel.close()
 
     async def _read_loop(self, connection: _Connection) -> None:
-        limits = self._session.config.limits
+        limits = self._session.limits
         while not connection.closing:
-            joined = self._session.slot_of(connection.identifier) is not None
+            joined = self._observe_slot(connection)
             try:
                 message = await self._receive(connection, bounded=not joined)
             except TimeoutError:
@@ -239,6 +279,7 @@ class SessionServer:
             replies = self._session.handle(connection.identifier, message)
             for reply in replies:
                 self._deliver(reply)
+            self._wake()
             if (
                 not joined
                 and self._refused(replies)
@@ -259,6 +300,86 @@ class SessionServer:
         if remaining <= 0.0:
             raise TimeoutError("join deadline passed")
         return await asyncio.wait_for(connection.channel.receive(), remaining)
+
+    def _observe_slot(self, connection: _Connection) -> bool:
+        """Say whether ``connection`` holds a slot now, re-arming the moment it stops.
+
+        Membership can be taken away while the connection stays exactly where it is.
+        The lobby handover is the case that matters: the moment a match starts, a lobby
+        seat stops counting and the session membership this connection has not proved
+        yet takes over, so :meth:`SessionAuthority.slot_of` returns ``None`` again and
+        the connection is a stranger holding a deadline it was given in a phase that is
+        over. Every member reaches that state at the same instant.
+
+        The transition is recorded on the connection, so whoever observes it first acts
+        on it and nobody acts on it twice. That matters because the reader is not the
+        only observer and is usually not the first: exactly one member is back at the
+        top of the read loop when a match starts -- the one that sent the start -- and
+        everybody else is parked in a read that will not return until they are sent
+        something. The per-tick sweep looks at those, and it has to re-arm what it finds
+        before it judges it, or it would close every member that did not press start.
+        Both observers run on the one event loop and neither awaits inside here, so the
+        read-and-update is indivisible and the two cannot race.
+        """
+        joined = self._session.slot_of(connection.identifier) is not None
+        if connection.held_slot and not joined:
+            self._rearm_join(connection)
+        connection.held_slot = joined
+        return joined
+
+    def _rearm_join(self, connection: _Connection) -> None:
+        """Give a connection its join budget back, measured from now.
+
+        The budget it was holding ran from when the socket was accepted, and a lobby
+        that spent longer than that deciding -- which is every lobby with two people
+        talking in it -- has already used all of it. Starting it again is not the same
+        as removing it: the wait stays bounded, it is simply bounded from the moment the
+        connection became a stranger rather than from a deadline that belonged to an
+        earlier phase. The attempt budget restarts with it, because proving session
+        membership is a different thing to prove than a lobby ticket was.
+        """
+        budget = self._session.limits.join_deadline_seconds
+        connection.join_deadline = asyncio.get_running_loop().time() + budget
+        connection.attempts = 0
+
+    def _sweep_join_deadlines(self) -> None:
+        """Bound the join of connections whose reader is parked and cannot bound itself.
+
+        A reader checks its own deadline at the top of each read. A connection that was
+        already waiting on one when the handover happened never gets to that check: it
+        is sitting in a read that will not return until its peer sends a frame, which a
+        client that takes its credential and then goes quiet never will. Every member of
+        a lobby except the one that pressed start is in exactly that position, so this
+        is the ordinary case rather than the pathological one.
+
+        It therefore goes through :meth:`_observe_slot` rather than reading
+        :attr:`_Connection.join_deadline` directly, and the order is the whole point: a
+        member that has just lost its lobby seat gets its budget back *here*, on the
+        first tick after the match started, and is judged against that. Testing the old
+        deadline first would close every member that did not send the start message,
+        before any of them could answer -- which is the same failure the re-arm exists
+        to prevent, moved from the reader into the clock.
+
+        What remains is a real bound. A connection that has been given the budget and
+        spends it without joining is closed, from the writer's end rather than by
+        cancelling a read whose position in the frame nobody knows. That is the same
+        reasoning as :meth:`_overflow`: a reader parked on a message that is never
+        coming is woken by closing the channel underneath it.
+
+        It runs per tick, so it exists only once a match is running, which is exactly
+        when a connection can hold a slot the other players are waiting on. Before the
+        handover an unjoined connection is bounded by its own reader, which is awake.
+        """
+        now = asyncio.get_running_loop().time()
+        for connection in list(self._connections.values()):
+            if connection.closing:
+                continue
+            if self._observe_slot(connection):
+                continue
+            if now < connection.join_deadline:
+                continue
+            self._close_with(connection, RejectionCode.JOIN_TIMEOUT)
+            self._close_later(connection)
 
     def _spent_attempts(self, connection: _Connection, budget: int, *, joined: bool) -> bool:
         """Count one failed approach and say whether the connection is out of them."""
@@ -346,7 +467,9 @@ class SessionServer:
         """Forget a connection, whatever ended it, and let the run carry on without it."""
         self._connections.pop(connection.identifier, None)
         slot = self._session.slot_of(connection.identifier)
-        self._session.disconnect(connection.identifier)
+        for reply in self._session.disconnect(connection.identifier):
+            self._deliver(reply)
+        self._wake()
         self._log_connection("connection_dropped", connection, slot=slot)
         connection.closing = True
         self._finish(connection)
@@ -380,6 +503,15 @@ class SessionServer:
                 writer.cancel()
         await connection.channel.close()
 
+    def _wake(self) -> None:
+        """Release the tick loop once there is something for it to do, or nothing left.
+
+        Both conditions matter. A match that started gives the loop ticks to run; a
+        lobby that ended gives it a reason to stop waiting and return.
+        """
+        if self._session.ticking or self._session.closed:
+            self._ticking.set()
+
     @staticmethod
     def _refused(replies: tuple[Reply, ...]) -> bool:
         """Whether answering a message produced a refusal rather than progress."""
@@ -394,14 +526,13 @@ class SessionServer:
         peer: str | None = None,
         level: int = logging.INFO,
     ) -> None:
-        config = self._session.config
         log_event(
             self._log,
             event,
-            session_id=config.session_id,
+            session_id=self._session.session_id,
             tick=self._session.tick,
-            content=content_label(config.content),
-            rules_digest=self._session.info.rules_digest,
+            content=content_label(self._session.content),
+            rules_digest=self._session.rules_digest,
             peer=peer,
             reason=reason,
             detail=detail,
@@ -418,14 +549,13 @@ class SessionServer:
         detail: str | None = None,
         level: int = logging.INFO,
     ) -> None:
-        config = self._session.config
         log_event(
             self._log,
             event,
-            session_id=config.session_id,
+            session_id=self._session.session_id,
             tick=self._session.tick,
-            content=content_label(config.content),
-            rules_digest=self._session.info.rules_digest,
+            content=content_label(self._session.content),
+            rules_digest=self._session.rules_digest,
             slot=slot if slot is not None else self._session.slot_of(connection.identifier),
             peer=connection.channel.peer,
             connection=connection.identifier,

@@ -11,7 +11,10 @@ From the repository root:
 uv run --locked --package battle-city-client python -m battle_city_client
 ```
 
-Options: `--seed`, `--scale` (1-8), `--frame-cap`. `--help` lists them.
+Options: `--seed`, `--scale` (1-8), `--frame-cap`. `--help` lists them. To reach a
+lobby, add `--server HOST:PORT --session ID --ticket TICKET`, optionally `--name` and
+`--content PACK@VERSION/LEVEL#SCHEMA`. The three online options are required together;
+without them the `ONLINE` menu entry says what is missing rather than disappearing.
 
 Headless, with no window and no sound device:
 
@@ -33,6 +36,11 @@ pygame and drives the real loop, the real renderer and the real simulation.
 | Menu select  | `Enter`         |
 | Menu back    | `ESC`           |
 | Window scale | `-` and `+`     |
+| Lobby ready  | `R`             |
+| Lobby mode (host)  | `M`       |
+| Lobby stage (host) | `L`       |
+| Lobby start (host) | `Enter`   |
+| Leave a lobby or an online run | `ESC` |
 | Quit         | Close the window, or `QUIT` on the main menu |
 
 Keyboard only in this build. Gamepad support and remapping are accessibility
@@ -80,6 +88,47 @@ completed, or a loss — is one overlay whose wording and menu come from the cam
 Giving a stage clear and a campaign completion their own `Screen` members is issue #36;
 `tests/client` asserts the current member list and is outside the campaign issue's files.
 
+## Online play
+
+`ONLINE` opens a server-owned lobby: the roster, the agreed mode and stage, who is
+ready, and whether the server says the match may start. The host chooses the mode and
+the stage; everyone agrees to a specific settings revision, and changing the settings
+withdraws every agreement. The server decides all of it — this client composes a host's
+message only when it *is* the host, and the server refuses it regardless if it is not.
+
+**An online client runs no simulation.** There is no `step` call anywhere on the online
+path. `online.py` holds the session, `remote.py` reads the authoritative snapshot into
+something the renderer can draw, and `netlink.py` moves frames on a background thread so
+the frame loop never waits on a socket. What is drawn is the last snapshot the server
+sent; the run ends when the server says it ended, and a lost link ends the session
+without inventing an outcome to fill the gap.
+
+**Competitive modes are selectable and are not playable.** Free-for-all and team battle
+are real, versioned settings, carried with their team assignments in the match settings
+a session and a replay record. This build will not start one, and says so in the lobby
+before anyone presses start: the shared simulation has a single player faction, player
+projectiles pass through player tanks, and the only outcomes it records are
+`BASE_DESTROYED` and `PLAYERS_ELIMINATED`. Player-versus-player combat, scoring and a
+competitive result are simulation rules that belong to an accepted gameplay proposal.
+The lobby refuses with `mode_unsupported` rather than running a co-op match and calling
+it a duel.
+
+**An online match is not the campaign.** The campaign above — the enemy quota, the
+600-tick spawn cadence, the score, the lives carried between stages, stage clear and
+campaign completion — is `battle_city_client.campaign`, and it runs in this process for a
+local run only. A server runs the shared simulation on the stage the lobby agreed to and
+nothing else: no waves are released, no score is kept, and the lives in the HUD are the
+simulation's per-slot count rather than a campaign's. The networking specification makes
+the server authoritative for score, lives and wave spawning, so those belong on the server
+before an online run can have them; putting the client's campaign in charge of a match it
+does not own would be exactly the client-side authority the specification forbids. Until
+that lands, an online co-op match is two players on one agreed stage, and the lobby does
+not claim otherwise.
+
+Reconnect, host migration and a lobby browser are not here. A dropped connection is a
+dropped player, a host that leaves ends its lobby, and a lost server is a lost session,
+as the networking specification's first release allows.
+
 ## Replacing the art
 
 Every pixel the renderer draws comes from an `AssetLibrary` (see `assets.py`).
@@ -111,8 +160,11 @@ in one interpreter — from loading a display library on the simulation's behalf
 
 ## Screen captures
 
-`tests/client/screenshots/` holds one PNG per screen plus a generated `README.md`
-recording the driver, scale, versions and seed that produced them. Ordinary test runs
+`tests/client/screenshots/` holds one PNG per offline screen plus a generated
+`README.md` recording the driver, scale, versions and seed that produced them.
+`tests/multiplayer/screenshots/` holds the online ones — the lobby, a blocked
+competitive configuration and a live co-op run — rendered against a real server by
+`tests/multiplayer/screenshot_tool.py`, which pytest does not collect. Ordinary test runs
 render every screen into a scratch directory and leave the tracked images alone, so
 `pytest` and `make ci` never dirty the working tree. Refresh them deliberately after a
 visual change:

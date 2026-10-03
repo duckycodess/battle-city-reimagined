@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from battle_city_content import ContentError, GridCell, Level, Pack, load_bundled_pack
+from battle_city_protocol import ContentRef
 from battle_city_sim import GridPos, PlayerSpawn, Stage, StageValidationError
 
 
@@ -88,6 +89,36 @@ def stage_from_level(level: Level) -> Stage:
         raise StageAdapterError(
             f"{level.level_id} ({level.origin}): {error}",
         ) from error
+
+
+def content_ref_for(pack: Pack, level: Level) -> ContentRef:
+    """Describe ``level`` inside ``pack`` as the reference peers compare on.
+
+    The server builds the same record from the same two fields, which is the point: a
+    lobby accepts a client when the two agree about the pack, and a session accepts it
+    when the two agree about the level as well.
+    """
+    return ContentRef(
+        pack_id=pack.pack_id,
+        pack_version=pack.version,
+        level_id=level.level_id,
+        content_schema_version=level.schema_version,
+    )
+
+
+def bundled_content_ref(level_id: str | None = None) -> ContentRef:
+    """The content reference for a bundled level, named or the first one.
+
+    This is what an online client claims by default. A lobby running a pack this build
+    does not ship refuses the join by name, which is the honest failure: the fix is to
+    install the pack, not to let the client in and desynchronise later.
+    """
+    try:
+        pack = load_bundled_pack()
+    except ContentError as error:
+        raise StageAdapterError(f"bundled pack: {error}") from error
+    level = pack.levels[0] if level_id is None else pack.level(level_id)
+    return content_ref_for(pack, level)
 
 
 def stage_catalog(pack: Pack) -> tuple[StageEntry, ...]:

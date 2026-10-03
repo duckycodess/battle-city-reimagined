@@ -37,6 +37,14 @@ and the architecture specification allows ``client -> sim, content, protocol`` a
 injects the one that commands nobody. ``tests/campaign`` injects a driver backed by the AI
 package to show the seam carries a real bot; giving the shipped client one is issue #35.
 
+There is also an online path, and it is a different game to the campaign rather than the
+campaign over a wire. A client joins a server-owned lobby, agrees to the settings it is
+shown, and plays a co-op match the server runs: it steps no simulation, keeps no local
+copy, and draws the last snapshot it was sent. The campaign's waves, score and lives are
+the single-player campaign's and are not yet run by a server, so an online match is the
+shared simulation on an agreed stage and nothing more; see ``online.py`` and the
+networking specification.
+
 Failure is still only ever the simulation's: the client reads
 ``SimulationState.outcome`` and never sets one, and the campaign's ``FAILED`` phase is
 derived from that same field. A base destroyed by a player's own shot is absorbed like
@@ -52,6 +60,9 @@ Layout
 ``timing``         elapsed milliseconds to whole ticks, in exact integers
 ``intents``        device-independent actions and the intent one tick is built from
 ``session``        one run: intent becomes legal simulation commands, nothing more
+``online``         one hosted match from the client's side: lobby, handover, remote run
+``remote``         a server snapshot read into something the renderer can draw
+``netlink``        the transport the online session is pumped through (no pygame)
 ``shell``          the screen state machine, testable without a window
 ``keymap``         keycode tables, split by screen
 ``theme``          palette and the fixed logical frame
@@ -76,12 +87,17 @@ from .campaign import (
     campaign_plan,
 )
 from .intents import Action, HeldActions, PlayerIntent, intent_from_held
+from .netlink import NetworkLink, TcpLink, open_tcp_link, parse_endpoint
+from .online import LobbyView, OnlineConfig, OnlinePhase, OnlineSession
+from .remote import RemoteBoard, RemoteStateError, board_from_snapshot, terrain_from_rows
 from .session import DEFAULT_SEED, StageSession
 from .shell import ClientShell, PauseCause, Screen
 from .stage_adapter import (
     StageAdapterError,
     StageEntry,
+    bundled_content_ref,
     bundled_stage_catalog,
+    content_ref_for,
     stage_catalog,
     stage_from_level,
 )
@@ -147,23 +163,37 @@ __all__ = [
     "FixedTickAccumulator",
     "HeldActions",
     "IdleEnemyDriver",
+    "LobbyView",
+    "NetworkLink",
+    "OnlineConfig",
+    "OnlinePhase",
+    "OnlineSession",
     "PauseCause",
     "PlayerIntent",
     "Presenter",
     "ProceduralAssetLibrary",
+    "RemoteBoard",
+    "RemoteStateError",
     "Renderer",
     "Screen",
     "StageAdapterError",
     "StageEntry",
     "StagePlan",
     "StageSession",
+    "TcpLink",
+    "board_from_snapshot",
     "build_app",
+    "bundled_content_ref",
     "bundled_stage_catalog",
     "campaign_plan",
+    "content_ref_for",
     "integer_scale",
     "intent_from_held",
     "main",
+    "open_tcp_link",
+    "parse_endpoint",
     "present_rect",
     "stage_catalog",
     "stage_from_level",
+    "terrain_from_rows",
 ]

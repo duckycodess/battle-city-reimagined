@@ -33,6 +33,9 @@ from .limits import (
     MAX_EVENT_VALUES,
     MAX_EVENTS_PER_MESSAGE,
     MAX_GRID_DIMENSION,
+    MAX_LEVELS_PER_LOBBY,
+    MAX_LOBBY_MEMBERS,
+    MAX_MODES_PER_LOBBY,
     MAX_PLAYERS_PER_SNAPSHOT,
     MAX_POWERUPS_PER_SNAPSHOT,
     MAX_PROJECTILES_PER_SNAPSHOT,
@@ -51,6 +54,18 @@ from .messages import (
     InputBatch,
     JoinAccepted,
     JoinRequest,
+    LobbyConfigure,
+    LobbyInfo,
+    LobbyJoin,
+    LobbyLeave,
+    LobbyMember,
+    LobbyReady,
+    LobbyStart,
+    LobbyState,
+    LobbyWelcome,
+    MatchMode,
+    MatchSettings,
+    MatchStarting,
     Message,
     MessageType,
     PlayerAction,
@@ -63,6 +78,7 @@ from .messages import (
     SessionInfo,
     StateSnapshot,
     TankSnapshot,
+    TeamAssignment,
     TickEvents,
 )
 from .validation import require_member
@@ -89,6 +105,22 @@ def message_type_of(message: Message) -> MessageType:
             return MessageType.REJECTED
         case SessionClosed():
             return MessageType.SESSION_CLOSED
+        case LobbyJoin():
+            return MessageType.LOBBY_JOIN
+        case LobbyConfigure():
+            return MessageType.LOBBY_CONFIGURE
+        case LobbyReady():
+            return MessageType.LOBBY_READY
+        case LobbyStart():
+            return MessageType.LOBBY_START
+        case LobbyLeave():
+            return MessageType.LOBBY_LEAVE
+        case LobbyWelcome():
+            return MessageType.LOBBY_WELCOME
+        case LobbyState():
+            return MessageType.LOBBY_STATE
+        case MatchStarting():
+            return MessageType.MATCH_STARTING
 
 
 def encode_message(message: Message) -> bytes:
@@ -110,11 +142,8 @@ def decode_client_message(payload: bytes) -> ClientMessage:
         raise MessageError(
             RejectionCode.UNEXPECTED_MESSAGE, f"{kind.value} is not a client message"
         )
-    match kind:
-        case MessageType.JOIN_REQUEST:
-            return _read_join_request(document)
-        case _:
-            return _read_input_batch(document)
+    reader = _CLIENT_READERS[kind]
+    return reader(document)
 
 
 def decode_server_message(payload: bytes) -> ServerMessage:
@@ -476,6 +505,125 @@ def _read_grid(fields: _Fields) -> tuple[str, ...] | None:
     return tuple(parsed)
 
 
+_SETTINGS_FIELDS: Final[tuple[str, ...]] = (
+    "mode",
+    "level_id",
+    "content",
+    "tick_rate",
+    "max_players",
+    "cheats_enabled",
+    "settings_version",
+)
+_LOBBY_INFO_FIELDS: Final[tuple[str, ...]] = (
+    "capacity",
+    "offered_modes",
+    "playable_modes",
+    "offered_levels",
+    "settings_version",
+)
+_MEMBER_FIELDS: Final[tuple[str, ...]] = (
+    "slot",
+    "display_name",
+    "ready",
+    "host",
+    "connected",
+    "team",
+)
+_TEAM_FIELDS: Final[tuple[str, ...]] = ("slot", "team")
+
+
+def _settings_body(settings: MatchSettings) -> dict[str, JsonValue]:
+    return {
+        "mode": settings.mode.value,
+        "level_id": settings.level_id,
+        "content": _content_body(settings.content),
+        "tick_rate": settings.tick_rate,
+        "max_players": settings.max_players,
+        "cheats_enabled": settings.cheats_enabled,
+        "settings_version": settings.settings_version,
+    }
+
+
+def _read_settings(fields: _Fields) -> MatchSettings:
+    child = fields.child("settings", _SETTINGS_FIELDS)
+    return MatchSettings(
+        mode=require_member("settings.mode", child.raw("mode"), MatchMode),
+        level_id=child.text("level_id"),
+        content=_read_content(child),
+        tick_rate=child.integer("tick_rate"),
+        max_players=child.integer("max_players"),
+        cheats_enabled=child.flag("cheats_enabled"),
+        settings_version=child.integer("settings_version"),
+    )
+
+
+def _read_modes(fields: _Fields, key: str) -> tuple[MatchMode, ...]:
+    return tuple(
+        require_member(f"lobby.{key}", value, MatchMode)
+        for value in fields.sequence(key, MAX_MODES_PER_LOBBY)
+    )
+
+
+def _lobby_info_body(lobby: LobbyInfo) -> dict[str, JsonValue]:
+    return {
+        "capacity": lobby.capacity,
+        "offered_modes": [mode.value for mode in lobby.offered_modes],
+        "playable_modes": [mode.value for mode in lobby.playable_modes],
+        "offered_levels": list(lobby.offered_levels),
+        "settings_version": lobby.settings_version,
+    }
+
+
+def _read_lobby_info(fields: _Fields) -> LobbyInfo:
+    child = fields.child("lobby", _LOBBY_INFO_FIELDS)
+    levels: list[str] = []
+    for index, value in enumerate(child.sequence("offered_levels", MAX_LEVELS_PER_LOBBY)):
+        if not isinstance(value, str):
+            raise MessageError(
+                RejectionCode.INVALID_FIELD, f"lobby.offered_levels[{index}] must be a string"
+            )
+        levels.append(value)
+    return LobbyInfo(
+        capacity=child.integer("capacity"),
+        offered_modes=_read_modes(child, "offered_modes"),
+        playable_modes=_read_modes(child, "playable_modes"),
+        offered_levels=tuple(levels),
+        settings_version=child.integer("settings_version"),
+    )
+
+
+def _member_body(member: LobbyMember) -> dict[str, JsonValue]:
+    return {
+        "slot": member.slot,
+        "display_name": member.display_name,
+        "ready": member.ready,
+        "host": member.host,
+        "connected": member.connected,
+        "team": member.team,
+    }
+
+
+def _read_member(value: JsonValue) -> LobbyMember:
+    fields = _entry("members", value, _MEMBER_FIELDS)
+    return LobbyMember(
+        slot=fields.integer("slot"),
+        display_name=fields.text("display_name"),
+        ready=fields.flag("ready"),
+        host=fields.flag("host"),
+        connected=fields.flag("connected"),
+        team=fields.optional_integer("team"),
+    )
+
+
+def _team_body(assignment: TeamAssignment) -> dict[str, JsonValue]:
+    return {"slot": assignment.slot, "team": assignment.team}
+
+
+def _read_team(value: JsonValue) -> TeamAssignment:
+    fields = _entry("teams", value, _TEAM_FIELDS)
+    return TeamAssignment(slot=fields.integer("slot"), team=fields.integer("team"))
+
+
 _JOIN_REQUEST_FIELDS: Final[tuple[str, ...]] = (
     "protocol_version",
     "session_id",
@@ -541,6 +689,163 @@ _SESSION_CLOSED_FIELDS: Final[tuple[str, ...]] = (
     "code",
     "detail",
 )
+
+
+_LOBBY_JOIN_FIELDS: Final[tuple[str, ...]] = (
+    "protocol_version",
+    "session_id",
+    "ticket",
+    "display_name",
+    "content",
+    "team",
+)
+_LOBBY_CONFIGURE_FIELDS: Final[tuple[str, ...]] = (
+    "protocol_version",
+    "session_id",
+    "slot",
+    "revision",
+    "mode",
+    "level_id",
+    "teams",
+)
+_LOBBY_READY_FIELDS: Final[tuple[str, ...]] = (
+    "protocol_version",
+    "session_id",
+    "slot",
+    "revision",
+    "ready",
+)
+_LOBBY_START_FIELDS: Final[tuple[str, ...]] = (
+    "protocol_version",
+    "session_id",
+    "slot",
+    "revision",
+)
+_LOBBY_LEAVE_FIELDS: Final[tuple[str, ...]] = ("protocol_version", "session_id", "slot")
+_LOBBY_WELCOME_FIELDS: Final[tuple[str, ...]] = (
+    "protocol_version",
+    "session_id",
+    "slot",
+    "host",
+    "lobby",
+)
+_LOBBY_STATE_FIELDS: Final[tuple[str, ...]] = (
+    "protocol_version",
+    "session_id",
+    "revision",
+    "settings",
+    "members",
+    "host_slot",
+    "startable",
+    "blocked",
+)
+_MATCH_STARTING_FIELDS: Final[tuple[str, ...]] = (
+    "protocol_version",
+    "session_id",
+    "slot",
+    "token",
+    "session",
+    "settings",
+)
+
+
+def _read_lobby_join(document: Mapping[str, JsonValue]) -> ClientMessage:
+    fields = _Fields("message", document, _LOBBY_JOIN_FIELDS)
+    return LobbyJoin(
+        protocol_version=_require_version(fields),
+        session_id=fields.text("session_id"),
+        ticket=fields.text("ticket"),
+        display_name=fields.text("display_name"),
+        content=_read_content(fields),
+        team=fields.optional_integer("team"),
+    )
+
+
+def _read_lobby_configure(document: Mapping[str, JsonValue]) -> ClientMessage:
+    fields = _Fields("message", document, _LOBBY_CONFIGURE_FIELDS)
+    version = _require_version(fields)
+    teams = fields.sequence("teams", MAX_LOBBY_MEMBERS)
+    return LobbyConfigure(
+        protocol_version=version,
+        session_id=fields.text("session_id"),
+        slot=fields.integer("slot"),
+        revision=fields.integer("revision"),
+        mode=require_member("mode", fields.raw("mode"), MatchMode),
+        level_id=fields.text("level_id"),
+        teams=tuple(_read_team(item) for item in teams),
+    )
+
+
+def _read_lobby_ready(document: Mapping[str, JsonValue]) -> ClientMessage:
+    fields = _Fields("message", document, _LOBBY_READY_FIELDS)
+    return LobbyReady(
+        protocol_version=_require_version(fields),
+        session_id=fields.text("session_id"),
+        slot=fields.integer("slot"),
+        revision=fields.integer("revision"),
+        ready=fields.flag("ready"),
+    )
+
+
+def _read_lobby_start(document: Mapping[str, JsonValue]) -> ClientMessage:
+    fields = _Fields("message", document, _LOBBY_START_FIELDS)
+    return LobbyStart(
+        protocol_version=_require_version(fields),
+        session_id=fields.text("session_id"),
+        slot=fields.integer("slot"),
+        revision=fields.integer("revision"),
+    )
+
+
+def _read_lobby_leave(document: Mapping[str, JsonValue]) -> ClientMessage:
+    fields = _Fields("message", document, _LOBBY_LEAVE_FIELDS)
+    return LobbyLeave(
+        protocol_version=_require_version(fields),
+        session_id=fields.text("session_id"),
+        slot=fields.integer("slot"),
+    )
+
+
+def _read_lobby_welcome(document: Mapping[str, JsonValue]) -> ServerMessage:
+    fields = _Fields("message", document, _LOBBY_WELCOME_FIELDS)
+    return LobbyWelcome(
+        protocol_version=_require_version(fields),
+        session_id=fields.text("session_id"),
+        slot=fields.integer("slot"),
+        host=fields.flag("host"),
+        lobby=_read_lobby_info(fields),
+    )
+
+
+def _read_lobby_state(document: Mapping[str, JsonValue]) -> ServerMessage:
+    fields = _Fields("message", document, _LOBBY_STATE_FIELDS)
+    version = _require_version(fields)
+    members = fields.sequence("members", MAX_LOBBY_MEMBERS)
+    raw_blocked = fields.optional("blocked")
+    return LobbyState(
+        protocol_version=version,
+        session_id=fields.text("session_id"),
+        revision=fields.integer("revision"),
+        settings=_read_settings(fields),
+        members=tuple(_read_member(item) for item in members),
+        host_slot=fields.integer("host_slot"),
+        startable=fields.flag("startable"),
+        blocked=(
+            None if raw_blocked is None else require_member("blocked", raw_blocked, RejectionCode)
+        ),
+    )
+
+
+def _read_match_starting(document: Mapping[str, JsonValue]) -> ServerMessage:
+    fields = _Fields("message", document, _MATCH_STARTING_FIELDS)
+    return MatchStarting(
+        protocol_version=_require_version(fields),
+        session_id=fields.text("session_id"),
+        slot=fields.integer("slot"),
+        token=fields.text("token"),
+        session=_read_session(fields),
+        settings=_read_settings(fields),
+    )
 
 
 def _read_join_request(document: Mapping[str, JsonValue]) -> JoinRequest:
@@ -651,6 +956,16 @@ def _read_session_closed(document: Mapping[str, JsonValue]) -> ServerMessage:
     )
 
 
+_CLIENT_READERS: Final[dict[MessageType, Callable[[Mapping[str, JsonValue]], ClientMessage]]] = {
+    MessageType.JOIN_REQUEST: _read_join_request,
+    MessageType.INPUT_BATCH: _read_input_batch,
+    MessageType.LOBBY_JOIN: _read_lobby_join,
+    MessageType.LOBBY_CONFIGURE: _read_lobby_configure,
+    MessageType.LOBBY_READY: _read_lobby_ready,
+    MessageType.LOBBY_START: _read_lobby_start,
+    MessageType.LOBBY_LEAVE: _read_lobby_leave,
+}
+
 _SERVER_READERS: Final[dict[MessageType, Callable[[Mapping[str, JsonValue]], ServerMessage]]] = {
     MessageType.JOIN_ACCEPTED: _read_join_accepted,
     MessageType.INPUT_ACCEPTED: _read_input_accepted,
@@ -658,6 +973,9 @@ _SERVER_READERS: Final[dict[MessageType, Callable[[Mapping[str, JsonValue]], Ser
     MessageType.TICK_EVENTS: _read_tick_events,
     MessageType.REJECTED: _read_rejected,
     MessageType.SESSION_CLOSED: _read_session_closed,
+    MessageType.LOBBY_WELCOME: _read_lobby_welcome,
+    MessageType.LOBBY_STATE: _read_lobby_state,
+    MessageType.MATCH_STARTING: _read_match_starting,
 }
 
 
@@ -735,4 +1053,72 @@ def _body(message: Message) -> dict[str, JsonValue]:
                 "session_id": message.session_id,
                 "code": message.code.value,
                 "detail": message.detail,
+            }
+        case LobbyJoin():
+            return {
+                "protocol_version": message.protocol_version,
+                "session_id": message.session_id,
+                "ticket": message.ticket,
+                "display_name": message.display_name,
+                "content": _content_body(message.content),
+                "team": message.team,
+            }
+        case LobbyConfigure():
+            return {
+                "protocol_version": message.protocol_version,
+                "session_id": message.session_id,
+                "slot": message.slot,
+                "revision": message.revision,
+                "mode": message.mode.value,
+                "level_id": message.level_id,
+                "teams": [_team_body(assignment) for assignment in message.teams],
+            }
+        case LobbyReady():
+            return {
+                "protocol_version": message.protocol_version,
+                "session_id": message.session_id,
+                "slot": message.slot,
+                "revision": message.revision,
+                "ready": message.ready,
+            }
+        case LobbyStart():
+            return {
+                "protocol_version": message.protocol_version,
+                "session_id": message.session_id,
+                "slot": message.slot,
+                "revision": message.revision,
+            }
+        case LobbyLeave():
+            return {
+                "protocol_version": message.protocol_version,
+                "session_id": message.session_id,
+                "slot": message.slot,
+            }
+        case LobbyWelcome():
+            return {
+                "protocol_version": message.protocol_version,
+                "session_id": message.session_id,
+                "slot": message.slot,
+                "host": message.host,
+                "lobby": _lobby_info_body(message.lobby),
+            }
+        case LobbyState():
+            return {
+                "protocol_version": message.protocol_version,
+                "session_id": message.session_id,
+                "revision": message.revision,
+                "settings": _settings_body(message.settings),
+                "members": [_member_body(member) for member in message.members],
+                "host_slot": message.host_slot,
+                "startable": message.startable,
+                "blocked": None if message.blocked is None else message.blocked.value,
+            }
+        case MatchStarting():
+            return {
+                "protocol_version": message.protocol_version,
+                "session_id": message.session_id,
+                "slot": message.slot,
+                "token": message.token,
+                "session": _session_body(message.session),
+                "settings": _settings_body(message.settings),
             }

@@ -68,7 +68,7 @@ from battle_city_sim import (
     step,
 )
 
-from .config import SessionConfig
+from .config import SessionConfig, SessionLimits
 from .content import rules_digest
 from .logs import content_label, log_event, session_logger
 from .translation import IllegalActionError, commands_for, protocol_events, snapshot_of
@@ -147,6 +147,31 @@ class GameSession:
         return self._config
 
     @property
+    def session_id(self) -> str:
+        return self._config.session_id
+
+    @property
+    def limits(self) -> SessionLimits:
+        return self._config.limits
+
+    @property
+    def content(self) -> ContentRef:
+        return self._config.content
+
+    @property
+    def rules_digest(self) -> str:
+        return self._info.rules_digest
+
+    @property
+    def ticking(self) -> bool:
+        """Whether the session wants its clock. A game session wants it from tick zero.
+
+        A lobby does not, which is the whole reason this is a question rather than an
+        assumption: see :class:`~battle_city_server.lobby.MatchSession`.
+        """
+        return not self._closed
+
+    @property
     def info(self) -> SessionInfo:
         """The session terms every client is told at join."""
         return self._info
@@ -200,28 +225,37 @@ class GameSession:
             )
         self._server_commands.setdefault(tick, []).extend(commands)
 
-    def connect(self) -> int:
-        """Register a connection that has not joined yet and return its identifier."""
-        connection = self._next_connection
-        self._next_connection += 1
+    def connect(self, identifier: int | None = None) -> int:
+        """Register a connection that has not joined yet and return its identifier.
+
+        ``identifier`` lets a caller that already numbers its connections — a lobby
+        handing a started match the connections it was holding — keep one numbering
+        across the handover, so a reply addressed to connection three means the same
+        socket on both sides of it.
+        """
+        connection = self._next_connection if identifier is None else identifier
+        self._next_connection = max(self._next_connection, connection) + 1
         self._connections.add(connection)
         return connection
 
-    def disconnect(self, connection: int) -> None:
+    def disconnect(self, connection: int) -> tuple[Reply, ...]:
         """Forget ``connection``, dropping any input it had queued.
 
         The slot's credential is revoked with it. The simulation keeps running: a run
         does not pause because a player left, and this release offers that player no way
-        back in.
+        back in. Nothing has to be said to anyone else, so the reply tuple is empty; it
+        exists because a lobby losing a member does have something to say, and both are
+        reached through the same call.
         """
         self._connections.discard(connection)
         slot = self._connection_slot.pop(connection, None)
         if slot is None:
-            return
+            return ()
         member = self._members[slot]
         member.connection = None
         member.pending.clear()
         member.revoked = True
+        return ()
 
     def handle(self, connection: int, message: ClientMessage) -> tuple[Reply, ...]:
         """Answer one decoded client message. Nothing is mutated before it is accepted."""
@@ -229,7 +263,18 @@ class GameSession:
             return ()
         if isinstance(message, JoinRequest):
             return self._handle_join(connection, message)
-        return self._handle_input(connection, message)
+        if isinstance(message, InputBatch):
+            return self._handle_input(connection, message)
+        # A lobby message reaching a running game session is a client talking about a
+        # phase that is over. It is refused by name rather than falling through into the
+        # input path, which would read fields this message does not have.
+        return (
+            self.rejection(
+                connection,
+                RejectionCode.UNEXPECTED_MESSAGE,
+                "the match has started; lobby messages are no longer accepted",
+            ),
+        )
 
     def close(
         self, code: RejectionCode = RejectionCode.SESSION_CLOSED, detail: str = ""

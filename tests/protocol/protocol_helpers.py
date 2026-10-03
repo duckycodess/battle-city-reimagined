@@ -16,18 +16,33 @@ from battle_city_protocol import (
     InputBatch,
     JoinAccepted,
     JoinRequest,
+    LobbyConfigure,
+    LobbyInfo,
+    LobbyJoin,
+    LobbyLeave,
+    LobbyMember,
+    LobbyReady,
+    LobbyStart,
+    LobbyState,
+    LobbyWelcome,
+    MatchMode,
+    MatchSettings,
+    MatchStarting,
     PlayerAction,
     PlayerSnapshot,
     PowerupSnapshot,
     ProjectileSnapshot,
+    RejectionCode,
     SessionInfo,
     StateSnapshot,
     TankSnapshot,
+    TeamAssignment,
     TickEvents,
 )
 
 SESSION_ID = "session-1"
 TOKEN = "token-slot-1-abcdef"
+TICKET = "ticket-slot-1-abcdef"
 RULES_DIGEST = "a" * 64
 STATE_HASH = "b" * 64
 GRID: tuple[str, ...] = ("0" * 16,) * 15 + ("0" * 8 + "8" + "0" * 7,)
@@ -121,6 +136,106 @@ def keyframe() -> StateSnapshot:
 
 def tick_events(*events: GameEvent, tick: int = 7) -> TickEvents:
     return TickEvents(session_id=SESSION_ID, tick=tick, events=tuple(events))
+
+
+# -- lobby --------------------------------------------------------------------
+#
+# One builder per lobby message, so the round-trip set in ``test_protocol_codec``
+# covers every member of ``MessageType`` rather than the six that existed before the
+# lobby. Each one is the smallest message the constructor will accept, with the optional
+# fields exercised where they change the encoding: a team preference on the join, a team
+# assignment on the configure, a blocking reason on the roster.
+
+
+def match_settings(mode: MatchMode = MatchMode.COOP) -> MatchSettings:
+    return MatchSettings(
+        mode=mode,
+        level_id="classic-01",
+        content=content_ref(),
+        tick_rate=60,
+        max_players=2,
+    )
+
+
+def lobby_info() -> LobbyInfo:
+    return LobbyInfo(
+        capacity=2,
+        offered_modes=(MatchMode.COOP, MatchMode.FREE_FOR_ALL, MatchMode.TEAM_BATTLE),
+        playable_modes=(MatchMode.COOP,),
+        offered_levels=("classic-01", "classic-02"),
+    )
+
+
+def lobby_member(slot: int = 1, *, host: bool = True, team: int | None = None) -> LobbyMember:
+    return LobbyMember(
+        slot=slot,
+        display_name=f"player-{slot}",
+        ready=False,
+        host=host,
+        connected=True,
+        team=team,
+    )
+
+
+def lobby_join() -> LobbyJoin:
+    return LobbyJoin(
+        session_id=SESSION_ID,
+        ticket=TICKET,
+        display_name="player-1",
+        content=content_ref(),
+        team=1,
+    )
+
+
+def lobby_configure(mode: MatchMode = MatchMode.TEAM_BATTLE) -> LobbyConfigure:
+    return LobbyConfigure(
+        session_id=SESSION_ID,
+        slot=1,
+        revision=3,
+        mode=mode,
+        level_id="classic-01",
+        teams=(TeamAssignment(slot=1, team=1), TeamAssignment(slot=2, team=2)),
+    )
+
+
+def lobby_ready(*, ready: bool = True) -> LobbyReady:
+    return LobbyReady(session_id=SESSION_ID, slot=2, revision=3, ready=ready)
+
+
+def lobby_start() -> LobbyStart:
+    return LobbyStart(session_id=SESSION_ID, slot=1, revision=3)
+
+
+def lobby_leave() -> LobbyLeave:
+    return LobbyLeave(session_id=SESSION_ID, slot=2)
+
+
+def lobby_welcome() -> LobbyWelcome:
+    return LobbyWelcome(session_id=SESSION_ID, slot=1, host=True, lobby=lobby_info())
+
+
+def lobby_state(
+    *, startable: bool = False, blocked: RejectionCode | None = RejectionCode.MEMBERS_NOT_READY
+) -> LobbyState:
+    return LobbyState(
+        session_id=SESSION_ID,
+        revision=3,
+        settings=match_settings(),
+        members=(lobby_member(1), lobby_member(2, host=False)),
+        host_slot=1,
+        startable=startable,
+        blocked=blocked,
+    )
+
+
+def match_starting() -> MatchStarting:
+    return MatchStarting(
+        session_id=SESSION_ID,
+        slot=1,
+        token=TOKEN,
+        session=session_info(),
+        settings=match_settings(),
+    )
 
 
 class FakeStream:
