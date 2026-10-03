@@ -488,7 +488,7 @@ class Lobby:
         seat.connection = connection
         seat.display_name = message.display_name
         seat.ready = False
-        seat.team = message.team if self._mode in TEAM_MODES else None
+        seat.team = self._granted_team(message.team, slot=seat.slot)
         self._connection_seat[connection] = seat.slot
         self._log_event("lobby_seat_taken", connection=connection, slot=seat.slot)
         # The one lobby message that says "you": sent to the arriving connection alone,
@@ -571,10 +571,30 @@ class Lobby:
         return ()
 
     def _handle_leave(self, connection: int, message: LobbyLeave) -> tuple[Reply, ...]:
+        """Free the seat, tell the rest of the lobby, and answer the leaver.
+
+        :meth:`disconnect` drops the connection before it broadcasts, which is right
+        for a socket that has already gone and wrong for one that is still open: the
+        member that asked to leave is no longer on the roster it would have been told
+        about, and a host that leaves is not among the connections its own closing
+        notice reaches. Either way the one client that is certainly still listening --
+        the one that just spoke -- heard nothing back, and its socket stayed open with
+        no seat behind it, waiting to be closed by a deadline instead of by an answer.
+
+        So a departure is acknowledged with the stable closing notice and the connection
+        is closed. Leaving on purpose and losing the link now reach the same place; the
+        difference is that this one says so.
+        """
         seat = self._owned_seat(connection, message.slot)
         if isinstance(seat, Reply):
             return (seat,)
-        return self.disconnect(connection)
+        replies = self.disconnect(connection)
+        goodbye = Reply(
+            connection=connection,
+            message=self.closing_notice(RejectionCode.SESSION_CLOSED, "left the lobby"),
+            close=True,
+        )
+        return (*replies, goodbye)
 
     # -- credentials -----------------------------------------------------------
 
@@ -621,6 +641,33 @@ class Lobby:
                 connection, RejectionCode.WRONG_PLAYER, f"connection holds slot {held}"
             )
         return self._seats[held]
+
+    def _granted_team(self, requested: int | None, *, slot: int) -> int | None:
+        """Decide what a joining member's team preference is actually worth.
+
+        A team in a join is a request, and the server is the one that answers it. The
+        number arrived on a client message, and recording it as given would mean any
+        member could put itself on any team by saying so -- including a team another
+        member already holds -- which is the client-chosen authority this lobby exists
+        to refuse. The host owns team assignment and makes it through
+        :class:`~battle_city_protocol.messages.LobbyConfigure`; a preference is only
+        ever honoured where it costs the host nothing to honour it.
+
+        So a preference is granted when the mode uses teams and nothing else holds that
+        number, and dropped otherwise. Dropped rather than refused: a seat with no team
+        is a seat the host can still assign, and failing an otherwise valid join over a
+        number nobody has agreed to mean anything yet would help no one. Nothing here
+        decides what a team *does* -- that is combat, it belongs to the competitive
+        gameplay proposal, and no mode that uses it can be started in this build.
+        """
+        if requested is None or self._mode not in TEAM_MODES:
+            return None
+        taken = {
+            seat.team
+            for other, seat in self._seats.items()
+            if other != slot and seat.occupied and seat.team is not None
+        }
+        return None if requested in taken else requested
 
     def _stale(self, connection: int) -> Reply:
         return self.rejection(

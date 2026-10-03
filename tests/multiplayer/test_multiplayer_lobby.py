@@ -36,6 +36,7 @@ from multiplayer_helpers import (
     Client,
     close_all,
     connect,
+    content_ref,
     join_request,
     lobby_configure,
     lobby_join,
@@ -268,6 +269,93 @@ def test_teams_are_recorded_for_a_team_mode_and_cleared_outside_one(tmp_path: Pa
     run(scenario)
 
 
+def test_a_joining_member_cannot_take_a_team_another_member_holds(tmp_path: Path) -> None:
+    """A team on a join is a request the server answers, not a field it copies.
+
+    The host owns team assignment. If the number a client sent were recorded as given,
+    a member could put itself on any team by saying so, and the roster every other
+    client renders would be carrying a client's claim about itself. The first request
+    for a free number is honoured because honouring it costs the host nothing; the
+    second is dropped, and the seat waits for the host to assign it.
+    """
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, _ = make_server(pack, slots=(1, 2, 3), mode=MatchMode.TEAM_BATTLE)
+        host, _ = await seated(server, pack, 1)
+        await host.drain()
+
+        guest = await connect(server)
+        await guest.send(
+            LobbyJoin(
+                session_id=SESSION_ID,
+                ticket=TICKETS[2],
+                display_name="guest",
+                content=content_ref(pack),
+                team=2,
+            )
+        )
+        await guest.receive_until(LobbyWelcome)
+        roster = await latest_roster(host)
+        assert [member.team for member in roster.members] == [None, 2]
+
+        # A third member asks for the number slot 2 already holds, and does not get it.
+        third = await connect(server)
+        await third.send(
+            LobbyJoin(
+                session_id=SESSION_ID,
+                ticket=TICKETS[3],
+                display_name="third",
+                content=content_ref(pack),
+                team=2,
+            )
+        )
+        await third.receive_until(LobbyWelcome)
+        final = await latest_roster(host)
+        assert [member.team for member in final.members] == [None, 2, None]
+
+        # The host can still put it there, because the host is who decides.
+        await host.send(
+            lobby_configure(
+                1,
+                revision=final.revision,
+                mode=MatchMode.TEAM_BATTLE,
+                teams=(TeamAssignment(slot=3, team=2),),
+            )
+        )
+        assigned = await latest_roster(host)
+        assert [member.team for member in assigned.members] == [None, None, 2]
+        await close_all(server, host, guest, third)
+
+    run(scenario)
+
+
+def test_a_team_request_is_ignored_outside_a_team_mode(tmp_path: Path) -> None:
+    """A co-op lobby has no teams, so a number sent to one means nothing at all."""
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, _ = make_server(pack)
+        host, _ = await seated(server, pack, 1)
+        await host.drain()
+        guest = await connect(server)
+        await guest.send(
+            LobbyJoin(
+                session_id=SESSION_ID,
+                ticket=TICKETS[2],
+                display_name="guest",
+                content=content_ref(pack),
+                team=1,
+            )
+        )
+        await guest.receive_until(LobbyWelcome)
+        roster = await latest_roster(host)
+        assert [member.team for member in roster.members] == [None, None]
+        await close_all(server, host, guest)
+
+    run(scenario)
+
+
 def test_a_team_cannot_be_assigned_to_an_empty_seat(tmp_path: Path) -> None:
     pack = write_pack(tmp_path)
 
@@ -459,6 +547,61 @@ def test_leaving_frees_the_seat_and_tells_the_others(tmp_path: Path) -> None:
         await guest.send(lobby_leave(2))
         roster = await host.receive_until(LobbyState)
         assert [member.slot for member in roster.members] == [1]
+        await close_all(server, host, guest)
+
+    run(scenario)
+
+
+def test_leaving_on_purpose_is_answered_rather_than_met_with_silence(
+    tmp_path: Path,
+) -> None:
+    """The one client certainly still listening is the one that just spoke.
+
+    A seat is freed the same way whether the socket went or the member asked to go, but
+    a member that asked is still connected and is owed an answer. Without one its socket
+    sits open behind no seat until a deadline notices, which looks to a player like the
+    game ignoring them.
+    """
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, match = make_server(pack)
+        host, _ = await seated(server, pack, 1)
+        guest, _ = await seated(server, pack, 2)
+        await host.drain()
+        await guest.drain()
+
+        await guest.send(lobby_leave(2))
+        notice = await guest.receive_until(SessionClosed)
+        assert notice.code is RejectionCode.SESSION_CLOSED
+        assert await guest.channel.receive() is None, "the server closes the socket it answered"
+
+        roster = await latest_roster(host)
+        assert [member.slot for member in roster.members] == [1]
+        assert match.lobby.occupied_slots() == (1,)
+        await close_all(server, host, guest)
+
+    run(scenario)
+
+
+def test_a_host_leaving_on_purpose_is_told_its_lobby_ended(tmp_path: Path) -> None:
+    """The host's own departure closes the lobby, and the host hears that too.
+
+    It is the case the broadcast cannot cover: the lobby's closing notice goes to the
+    connections the lobby still has, and the leaver has already been removed from them.
+    """
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, _ = make_server(pack)
+        host, _ = await seated(server, pack, 1)
+        guest, _ = await seated(server, pack, 2)
+        await host.drain()
+        await guest.drain()
+
+        await host.send(lobby_leave(1))
+        assert (await host.receive_until(SessionClosed)).code is RejectionCode.SESSION_CLOSED
+        assert (await guest.receive_until(SessionClosed)).code is RejectionCode.SESSION_CLOSED
         await close_all(server, host, guest)
 
     run(scenario)
