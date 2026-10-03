@@ -86,6 +86,7 @@ class _Connection:
         "join_deadline",
         "closing",
         "finished",
+        "held_slot",
         "identifier",
         "outbound",
         "shutdown",
@@ -100,6 +101,15 @@ class _Connection:
         self.finished = False
         self.attempts = 0
         self.join_deadline = 0.0
+        self.held_slot = False
+        """Whether this connection held a slot the last time anything looked.
+
+        Kept on the connection rather than in the reader because the reader is not the
+        only thing that looks, and is not reliably the first: a connection parked in a
+        read is not looking at all. It is what makes "this connection just became a
+        stranger again" a fact about the connection instead of a local variable in
+        whichever coroutine happened to notice.
+        """
         self.writer: asyncio.Task[None] | None = None
         self.shutdown: asyncio.Task[None] | None = None
 
@@ -170,6 +180,7 @@ class SessionServer:
 
         connection = _Connection(self._session.connect(), channel, limits.max_outbound_messages)
         connection.join_deadline = asyncio.get_running_loop().time() + limits.join_deadline_seconds
+        connection.held_slot = self._session.slot_of(connection.identifier) is not None
         self._connections[connection.identifier] = connection
         connection.writer = asyncio.create_task(self._write_loop(connection))
         self._log_connection("connection_opened", connection)
@@ -240,12 +251,8 @@ class SessionServer:
 
     async def _read_loop(self, connection: _Connection) -> None:
         limits = self._session.limits
-        held_slot = self._session.slot_of(connection.identifier) is not None
         while not connection.closing:
-            joined = self._session.slot_of(connection.identifier) is not None
-            if held_slot and not joined:
-                self._rearm_join(connection)
-            held_slot = joined
+            joined = self._observe_slot(connection)
             try:
                 message = await self._receive(connection, bounded=not joined)
             except TimeoutError:
@@ -294,43 +301,70 @@ class SessionServer:
             raise TimeoutError("join deadline passed")
         return await asyncio.wait_for(connection.channel.receive(), remaining)
 
+    def _observe_slot(self, connection: _Connection) -> bool:
+        """Say whether ``connection`` holds a slot now, re-arming the moment it stops.
+
+        Membership can be taken away while the connection stays exactly where it is.
+        The lobby handover is the case that matters: the moment a match starts, a lobby
+        seat stops counting and the session membership this connection has not proved
+        yet takes over, so :meth:`SessionAuthority.slot_of` returns ``None`` again and
+        the connection is a stranger holding a deadline it was given in a phase that is
+        over. Every member reaches that state at the same instant.
+
+        The transition is recorded on the connection, so whoever observes it first acts
+        on it and nobody acts on it twice. That matters because the reader is not the
+        only observer and is usually not the first: exactly one member is back at the
+        top of the read loop when a match starts -- the one that sent the start -- and
+        everybody else is parked in a read that will not return until they are sent
+        something. The per-tick sweep looks at those, and it has to re-arm what it finds
+        before it judges it, or it would close every member that did not press start.
+        Both observers run on the one event loop and neither awaits inside here, so the
+        read-and-update is indivisible and the two cannot race.
+        """
+        joined = self._session.slot_of(connection.identifier) is not None
+        if connection.held_slot and not joined:
+            self._rearm_join(connection)
+        connection.held_slot = joined
+        return joined
+
     def _rearm_join(self, connection: _Connection) -> None:
-        """Give a connection its join budget back when the authority lets go of its slot.
+        """Give a connection its join budget back, measured from now.
 
-        A slot can go away while the connection stays exactly where it is. The lobby
-        handover is the case that matters: the moment a match starts, membership stops
-        being the seat the lobby granted and becomes the session membership this
-        connection has not proved yet, so :meth:`SessionAuthority.slot_of` returns
-        ``None`` again and the reader is a stranger once more.
-
-        The deadline it was holding was measured from when the socket was accepted, and
-        a lobby that spent longer than the budget deciding — which is every lobby with
-        two people talking in it — has already used all of it. Without this the next
-        read would time out before the client could possibly answer, the host would be
-        closed with ``join_timeout``, and the match it had just started would never be
-        joined by anybody. Re-arming restarts the budget rather than removing it: the
-        wait stays bounded, it is just bounded from the moment the connection became a
-        stranger instead of from a deadline that belonged to a phase that is over.
+        The budget it was holding ran from when the socket was accepted, and a lobby
+        that spent longer than that deciding -- which is every lobby with two people
+        talking in it -- has already used all of it. Starting it again is not the same
+        as removing it: the wait stays bounded, it is simply bounded from the moment the
+        connection became a stranger rather than from a deadline that belonged to an
+        earlier phase. The attempt budget restarts with it, because proving session
+        membership is a different thing to prove than a lobby ticket was.
         """
         budget = self._session.limits.join_deadline_seconds
         connection.join_deadline = asyncio.get_running_loop().time() + budget
         connection.attempts = 0
 
     def _sweep_join_deadlines(self) -> None:
-        """Close connections whose join budget ran out while their reader was parked.
+        """Bound the join of connections whose reader is parked and cannot bound itself.
 
-        :meth:`_rearm_join` can only bound a reader that comes back to ask for the next
-        message. A connection that was already waiting on one when the handover happened
-        is not asking for anything: it is sitting in a read that will not return until
-        its peer sends a frame, which a client that takes its credential and then goes
-        quiet never will. The deadline it was given would be checked at the top of a
-        read that never starts.
+        A reader checks its own deadline at the top of each read. A connection that was
+        already waiting on one when the handover happened never gets to that check: it
+        is sitting in a read that will not return until its peer sends a frame, which a
+        client that takes its credential and then goes quiet never will. Every member of
+        a lobby except the one that pressed start is in exactly that position, so this
+        is the ordinary case rather than the pathological one.
 
-        So the bound is applied from here as well, where there is no read to wait for,
-        and the connection is closed the way an overflowing one is -- from the writer's
-        end, rather than by cancelling a read whose position in the frame nobody knows.
-        That is the same reasoning as :meth:`_overflow`: a reader parked on a message
-        that is never coming is woken by closing the channel underneath it.
+        It therefore goes through :meth:`_observe_slot` rather than reading
+        :attr:`_Connection.join_deadline` directly, and the order is the whole point: a
+        member that has just lost its lobby seat gets its budget back *here*, on the
+        first tick after the match started, and is judged against that. Testing the old
+        deadline first would close every member that did not send the start message,
+        before any of them could answer -- which is the same failure the re-arm exists
+        to prevent, moved from the reader into the clock.
+
+        What remains is a real bound. A connection that has been given the budget and
+        spends it without joining is closed, from the writer's end rather than by
+        cancelling a read whose position in the frame nobody knows. That is the same
+        reasoning as :meth:`_overflow`: a reader parked on a message that is never
+        coming is woken by closing the channel underneath it.
 
         It runs per tick, so it exists only once a match is running, which is exactly
         when a connection can hold a slot the other players are waiting on. Before the
@@ -340,7 +374,7 @@ class SessionServer:
         for connection in list(self._connections.values()):
             if connection.closing:
                 continue
-            if self._session.slot_of(connection.identifier) is not None:
+            if self._observe_slot(connection):
                 continue
             if now < connection.join_deadline:
                 continue

@@ -10,8 +10,14 @@ What the lobby owns
 -------------------
 Seats, presence, readiness, the match settings and the moment of start. Every one of
 them is server state: a client asks, and the server decides. A client cannot name its
-own slot, cannot award itself a team, cannot mint a credential and cannot start a match
-it is not the host of.
+own slot, cannot mint a credential and cannot start a match it is not the host of.
+
+A team is the one place where asking can be answered yes, and it is still the server
+answering. A join may carry a preferred team number; it is granted only when the mode
+uses teams and no other seat holds that number, and dropped without complaint otherwise.
+The host owns assignment proper and makes it through ``LobbyConfigure``, which is the
+only way a seat's team is really decided and the only way a team can be taken from a
+seat that has one.
 
 Agreement is explicit and revisioned
 ------------------------------------

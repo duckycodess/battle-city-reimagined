@@ -9,6 +9,7 @@ server package's own in-process transport.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from battle_city_protocol import (
     SessionClosed,
     StateSnapshot,
 )
-from battle_city_server import MatchSession, SessionLimits, SessionServer
+from battle_city_server import MatchSession, RealTimeClock, SessionLimits, SessionServer
 from battle_city_sim import Direction, state_hash
 from multiplayer_helpers import (
     LEVEL_ID,
@@ -137,6 +138,151 @@ def test_a_lobby_older_than_the_join_deadline_still_hands_over(tmp_path: Path) -
     run(scenario)
 
 
+def test_a_match_that_ticks_before_everyone_has_joined_still_lets_them_join(
+    tmp_path: Path,
+) -> None:
+    """Ticks between the handover and the join must not eat the join.
+
+    Exactly one member is back at the top of its read loop when a match starts: the one
+    whose start message caused it. Everybody else is parked in a read, so nothing of
+    theirs has looked at a deadline since the lobby seat they no longer hold was granted.
+    The clock is what looks at them next, and a clock that judged them against the
+    deadline from that earlier phase would close every member that did not press start,
+    before any of them could answer the credential they were just sent.
+
+    Here the lobby outlives the budget, as a real one does, and a tick lands between
+    MatchStarting and the JoinRequests. Both slots must still join.
+    """
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, match = make_server(pack, limits=SessionLimits(join_deadline_seconds=0.2))
+        clients = [await seat(server, pack, slot, f"p{slot}") for slot in (1, 2)]
+        for client in clients:
+            await client.drain()
+        await asyncio.sleep(0.4)
+        for client, slot in zip(clients, (1, 2), strict=True):
+            await client.send(lobby_ready(slot, revision=0))
+        for client in clients:
+            await client.drain()
+        await clients[0].send(lobby_start(1))
+        tokens = {}
+        for client, slot in zip(clients, (1, 2), strict=True):
+            tokens[slot] = (await client.receive_until(MatchStarting)).token
+
+        # The clock runs. Nobody has proved session membership yet.
+        for _ in range(3):
+            await server.advance_tick()
+            await asyncio.sleep(0)
+
+        for client, slot in zip(clients, (1, 2), strict=True):
+            await client.send(join_request(pack, slot, tokens[slot]))
+            assert (await client.receive_until(JoinAccepted)).slot == slot
+        assert match.game is not None
+        assert match.game.joined_slots() == (1, 2)
+        await close_all(server, *clients)
+
+    run(scenario)
+
+
+def test_an_old_lobby_hands_over_under_a_running_clock(tmp_path: Path) -> None:
+    """The same thing again, with a real clock driving the server rather than a test.
+
+    ``advance_tick`` called by hand is a tidy approximation of a running session. This
+    one runs the server's own loop on a sixty-hertz real-time clock, so the ticks land
+    between the handover and the joins on their own schedule rather than where the test
+    put them, which is how the defect reached a reviewer in the first place.
+    """
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, match = make_server(pack, limits=SessionLimits(join_deadline_seconds=0.2))
+        loop = asyncio.create_task(server.run(RealTimeClock(60)))
+        try:
+            clients = [await seat(server, pack, slot, f"p{slot}") for slot in (1, 2)]
+            for client in clients:
+                await client.drain()
+            await asyncio.sleep(0.4)
+            for client, slot in zip(clients, (1, 2), strict=True):
+                await client.send(lobby_ready(slot, revision=0))
+            for client in clients:
+                await client.drain()
+            await clients[0].send(lobby_start(1))
+            tokens = {}
+            for client, slot in zip(clients, (1, 2), strict=True):
+                tokens[slot] = (await client.receive_until(MatchStarting)).token
+            await asyncio.sleep(0.05)
+
+            for client, slot in zip(clients, (1, 2), strict=True):
+                await client.send(join_request(pack, slot, tokens[slot]))
+                assert (await client.receive_until(JoinAccepted)).slot == slot
+            assert match.game is not None
+            assert match.game.joined_slots() == (1, 2)
+            await close_all(server, *clients)
+        finally:
+            loop.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await loop
+
+    run(scenario)
+
+
+def test_one_member_joining_is_not_held_up_by_one_that_never_does(
+    tmp_path: Path,
+) -> None:
+    """A silent member is closed on its own budget and the match goes on without it.
+
+    This is the other half of the re-arm: it hands the budget back, it does not hand it
+    away. A client that takes its credential and says nothing is holding a slot the
+    other players are waiting on, so it is closed when the budget it was given runs out
+    -- while the member that did join keeps its run.
+    """
+    pack = write_pack(tmp_path)
+
+    async def scenario() -> None:
+        server, match = make_server(pack, limits=SessionLimits(join_deadline_seconds=0.2))
+        clients = [await seat(server, pack, slot, f"p{slot}") for slot in (1, 2)]
+        for client in clients:
+            await client.drain()
+        for client, slot in zip(clients, (1, 2), strict=True):
+            await client.send(lobby_ready(slot, revision=0))
+        for client in clients:
+            await client.drain()
+        await clients[0].send(lobby_start(1))
+        host, silent = clients
+        tokens = {}
+        for client, slot in zip(clients, (1, 2), strict=True):
+            tokens[slot] = (await client.receive_until(MatchStarting)).token
+
+        await host.send(join_request(pack, 1, tokens[1]))
+        assert (await host.receive_until(JoinAccepted)).slot == 1
+        await host.receive_until(StateSnapshot)
+
+        # Slot 2 never answers. The first tick after the handover hands it the budget
+        # back; it is closed on the tick after that budget is spent, not before.
+        await server.advance_tick()
+        assert not any(isinstance(m, SessionClosed) for m in await silent.drain())
+        await asyncio.sleep(0.4)
+        await server.advance_tick()
+        assert (await silent.receive_until(SessionClosed)).code is RejectionCode.JOIN_TIMEOUT
+
+        assert match.game is not None
+        assert match.game.joined_slots() == (1,)
+        assert not match.closed
+
+        # The member that did join keeps its run, and keeps being told about it.
+        await host.drain()
+        await host.send(move(1, 1, DirectionCode.LEFT))
+        await asyncio.sleep(0)
+        await server.advance_tick()
+        assert (await host.receive_until(StateSnapshot)).tick == match.state.tick
+        assert match.state.tank(1).facing is Direction.LEFT
+        await silent.close()
+        await close_all(server, host)
+
+    run(scenario)
+
+
 def test_a_connection_that_never_joins_the_started_match_is_still_closed(
     tmp_path: Path,
 ) -> None:
@@ -166,7 +312,10 @@ def test_a_connection_that_never_joins_the_started_match_is_still_closed(
         # Neither client answers with its JoinRequest. The host's reader comes back for
         # the next message and is bounded there; the guest's is parked in a read that
         # will never return, and is bounded by the per-tick sweep instead. Both paths
-        # have to end the same way, which is why both clients are checked here.
+        # have to end the same way, which is why both clients are checked here -- and
+        # both are given the budget first, so this is the budget being spent rather
+        # than the stale deadline from the lobby being read by mistake.
+        await server.advance_tick()
         await asyncio.sleep(0.4)
         await server.advance_tick()
         closed = [await client.receive_until(SessionClosed) for client in clients]

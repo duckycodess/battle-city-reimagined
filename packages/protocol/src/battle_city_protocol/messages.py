@@ -881,8 +881,10 @@ type ClientMessage = (
 
 The lobby additions keep that property. A client may ask for a seat, agree to settings,
 and — if it is the host — propose settings and ask to start. It cannot name its own slot
-at join, cannot award itself a team outside the host's assignment, cannot mint a token
-and cannot declare a result.
+at join, cannot mint a token and cannot declare a result. The team it may name in a join
+is a request the server answers rather than a field it copies: granted only where the
+mode uses teams and nothing else holds that number, and the host's assignment overrides
+it either way.
 """
 
 type ServerMessage = (
