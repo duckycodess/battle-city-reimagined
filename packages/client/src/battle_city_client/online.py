@@ -369,7 +369,10 @@ class OnlineSession:
     def _apply_snapshot(self, snapshot: StateSnapshot) -> None:
         try:
             if snapshot.grid is not None:
-                terrain = terrain_from_rows(snapshot.grid)
+                terrain = terrain_from_rows(
+                    snapshot.grid,
+                    content_schema_version=self.content.content_schema_version,
+                )
                 self._terrain_tick = snapshot.tick
             elif self.board is not None:
                 terrain = self.board.grid

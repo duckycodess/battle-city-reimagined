@@ -29,6 +29,8 @@ from battle_city_protocol import (
 from battle_city_protocol.validation import require_token
 from battle_city_sim import DEFAULT_RULES, Rules, Stage
 
+from .content import UnspeakableTerrainError, require_speakable_terrain
+
 DEFAULT_TICK_RATE: Final[int] = 60
 
 
@@ -146,6 +148,17 @@ class SessionConfig:
     def __post_init__(self) -> None:
         if not self.credentials:
             raise ServerConfigurationError("a session needs at least one player credential")
+        try:
+            # A keyframe carries this stage's rows and the content reference is what tells
+            # a client how to read them, so a session claiming a version its own terrain
+            # does not fit is refused here rather than discovered on the first keyframe.
+            require_speakable_terrain(
+                self.stage.grid.to_rows(), self.content.content_schema_version
+            )
+        except UnspeakableTerrainError as error:
+            raise ServerConfigurationError(
+                f"stage {self.stage.stage_id} does not fit its content reference: {error}"
+            ) from error
         if len(self.credentials) > MAX_PLAYERS_PER_SNAPSHOT:
             raise ServerConfigurationError(
                 f"a session carries at most {MAX_PLAYERS_PER_SNAPSHOT} players"
