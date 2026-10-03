@@ -9,8 +9,24 @@ From the repository root::
 ``--seed``, ``--scale`` and ``--frame-cap`` are accepted; ``--help`` lists them. The
 client opens on a main menu, offers the three bundled classic stages, and plays the one
 you pick. Arrows or WASD drive, space or ``J`` fires, ``ESC`` or ``P`` pauses, ``-`` and
-``+`` change the window scale, and the window can be resized freely. There is no audio
-and no gamepad support in this build.
+``+`` change the window scale, and the window can be resized freely. A gamepad drives
+the same actions, and the ``OPTIONS`` screen remaps either device. There is no audio in
+this build; the sound controls are there, independent and labelled inactive.
+
+Accessibility
+-------------
+``OPTIONS`` holds contrast, reduced motion, pad dead zone, menu-cursor repeat,
+independent effect and music levels with their own mutes, and a rebindable control for
+every movement, fire, cursor and pause action. The preferences last for the launch that
+set them and are never written: the settings document holds the window scale, the frame
+cap and the roster name, and adding a field to it is a schema change that belongs to the
+issue that owns the format. The window scale is the interface's enlargement control and
+*is* saved, as it always was.
+
+Going back and quitting cannot be rebound, ``F5`` resets every preference and binding,
+and both work from inside a capture, so the remapping screen cannot lock a player out.
+Accessibility changes no rule: a binding decides which action an input names, a repeat
+can only be a cursor action, and a tick still carries a facing and a fire flag.
 
 Two small files are kept, under ``$BATTLE_CITY_SAVE_DIR`` or the platform's data
 directory: the window scale, frame cap and roster name, and a campaign record holding a
@@ -65,6 +81,9 @@ Layout
 ------
 ``stage_adapter``  pure, validated ``Level`` to ``Stage`` mapping (no pygame, no clock)
 ``campaign``       the single-player campaign: waves, score, lives, win and loss
+``accessibility``  session-only preferences and the pure logic that acts on them
+``options``        the options screen as rows and the edits a cursor makes to them
+``gamepad``        SDL joysticks, hot-plug included, as device-independent controls
 ``timing``         elapsed milliseconds to whole ticks, in exact integers
 ``intents``        device-independent actions and the intent one tick is built from
 ``session``        one run: intent becomes legal simulation commands, nothing more
@@ -86,6 +105,17 @@ Layout
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Final
 
+from .accessibility import (
+    DEFAULT_ACCESSIBILITY,
+    AccessibilityPreferences,
+    AudioPreferences,
+    BindingConflict,
+    BindingSet,
+    GamepadControl,
+    GamepadControlKind,
+    RepeatOptions,
+    RepeatTimer,
+)
 from .campaign import (
     DEFAULT_CAMPAIGN_RULES,
     CampaignPhase,
@@ -99,6 +129,7 @@ from .campaign import (
 from .intents import Action, HeldActions, PlayerIntent, intent_from_held
 from .netlink import NetworkLink, TcpLink, open_tcp_link, parse_endpoint
 from .online import LobbyView, OnlineConfig, OnlinePhase, OnlineSession
+from .options import OptionId, OptionRow, OptionsState
 from .persistence import (
     BADGES,
     Badge,
@@ -123,22 +154,26 @@ from .stage_adapter import (
     stage_from_level,
     stage_identity,
 )
+from .theme import ContrastMode, Palette
 from .timing import NOMINAL_TICK_RATE, FixedTickAccumulator
 
 if TYPE_CHECKING:
     from .app import ClientApp, build_app, main
     from .assets import AssetLibrary, ProceduralAssetLibrary
     from .display import Presenter, integer_scale, present_rect
+    from .gamepad import GamepadHub, open_gamepads
     from .rendering import Renderer
 
 _LAZY_EXPORTS: Final[dict[str, str]] = {
     "AssetLibrary": ".assets",
     "ClientApp": ".app",
+    "GamepadHub": ".gamepad",
     "Presenter": ".display",
     "ProceduralAssetLibrary": ".assets",
     "Renderer": ".rendering",
     "build_app": ".app",
     "integer_scale": ".display",
+    "open_gamepads": ".gamepad",
     "main": ".app",
     "present_rect": ".display",
 }
@@ -171,20 +206,29 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "AccessibilityPreferences",
     "Action",
     "AssetLibrary",
+    "AudioPreferences",
     "BADGES",
     "Badge",
+    "BindingConflict",
+    "BindingSet",
     "CampaignPhase",
     "CampaignProgress",
     "CampaignRules",
     "CampaignRun",
     "ClientApp",
     "ClientShell",
+    "ContrastMode",
+    "DEFAULT_ACCESSIBILITY",
     "DEFAULT_CAMPAIGN_RULES",
     "DEFAULT_SEED",
     "EnemyCommandDriver",
     "FixedTickAccumulator",
+    "GamepadControl",
+    "GamepadControlKind",
+    "GamepadHub",
     "HeldActions",
     "IdleEnemyDriver",
     "LobbyView",
@@ -195,6 +239,10 @@ __all__ = [
     "OnlineConfig",
     "OnlinePhase",
     "OnlineSession",
+    "OptionId",
+    "OptionRow",
+    "OptionsState",
+    "Palette",
     "PauseCause",
     "PlayerIntent",
     "Presenter",
@@ -203,6 +251,8 @@ __all__ = [
     "RemoteBoard",
     "RemoteStateError",
     "Renderer",
+    "RepeatOptions",
+    "RepeatTimer",
     "ReplayLibrary",
     "Screen",
     "SpectatorView",
@@ -221,6 +271,7 @@ __all__ = [
     "integer_scale",
     "intent_from_held",
     "main",
+    "open_gamepads",
     "open_tcp_link",
     "parse_endpoint",
     "present_rect",

@@ -196,6 +196,10 @@ def test_every_screen_draws_something() -> None:
     shell.handle(Action.UI_DOWN)
     shell.handle(Action.UI_CONFIRM)
     frames[Screen.CONTROLS] = _rendered(shell)
+    shell.handle(Action.UI_CANCEL)
+    shell.handle(Action.UI_DOWN)
+    shell.handle(Action.UI_CONFIRM)
+    frames[Screen.OPTIONS] = _rendered(shell)
 
     playing = _playing_shell()
     frames[Screen.PLAYING] = _rendered(playing)

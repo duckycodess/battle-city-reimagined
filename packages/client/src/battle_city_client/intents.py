@@ -18,12 +18,20 @@ waiting for ``left`` to be released.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Final
 
 from battle_city_sim import Direction
+
+KEYBOARD_DEVICE: Final[int] = -1
+"""The device identifier the keyboard is tracked under.
+
+Restated here rather than imported from :mod:`battle_city_client.accessibility`, which
+imports this module: negative so it can never collide with an SDL joystick instance
+identifier, which counts up from zero. ``tests/accessibility`` asserts the two agree.
+"""
 
 
 class Action(Enum):
@@ -36,6 +44,8 @@ class Action(Enum):
     FIRE = "fire"
     UI_UP = "ui_up"
     UI_DOWN = "ui_down"
+    UI_LEFT = "ui_left"
+    UI_RIGHT = "ui_right"
     UI_CONFIRM = "ui_confirm"
     UI_CANCEL = "ui_cancel"
     TOGGLE_PAUSE = "toggle_pause"
@@ -46,6 +56,7 @@ class Action(Enum):
     QUIT = "quit"
     SCALE_UP = "scale_up"
     SCALE_DOWN = "scale_down"
+    OPTION_RESET = "option_reset"
 
 
 MOVEMENT_ACTIONS: Final[tuple[Action, ...]] = (
@@ -99,28 +110,41 @@ def intent_from_held(held: Sequence[Action]) -> PlayerIntent:
 
 @dataclass(slots=True)
 class HeldActions:
-    """Which continuous actions are down, in the order they were pressed.
+    """Which continuous actions are down, in the order they were pressed, and on what.
 
     A key repeat, a duplicated press event or a release for a key that was never seen are
     all ordinary things a window system delivers; each is idempotent here rather than an
     error, because dropping a frame of input is a better failure than crashing the loop.
+
+    Every entry remembers the device it came from. That is what makes a pad that is
+    unplugged mid-run, or a window that loses focus while a pad is held, droppable
+    without touching the other device: the operating system stops delivering releases for
+    a device that is gone, so its contribution would otherwise stay down forever, and
+    clearing *everything* would release a key the player is still holding on the
+    keyboard. See :meth:`clear_device`.
     """
 
-    _order: list[Action] = field(default_factory=list, init=False, repr=False)
+    _order: list[tuple[int, Action]] = field(default_factory=list, init=False, repr=False)
 
-    def press(self, action: Action) -> None:
-        """Record ``action`` as held, moving it to the front of recency."""
-        if action in self._order:
-            self._order.remove(action)
-        self._order.append(action)
+    def press(self, action: Action, device: int = KEYBOARD_DEVICE) -> None:
+        """Record ``action`` as held on ``device``, moving it to the front of recency."""
+        entry = (device, action)
+        if entry in self._order:
+            self._order.remove(entry)
+        self._order.append(entry)
 
-    def release(self, action: Action) -> None:
-        """Record ``action`` as no longer held. Releasing an unheld action does nothing."""
-        if action in self._order:
-            self._order.remove(action)
+    def release(self, action: Action, device: int = KEYBOARD_DEVICE) -> None:
+        """Record ``action`` as no longer held on ``device``. Unheld releases do nothing.
+
+        Only that device's entry goes. The same action held on the other device is still
+        held, which is what a player holding a direction on both expects.
+        """
+        entry = (device, action)
+        if entry in self._order:
+            self._order.remove(entry)
 
     def clear(self) -> None:
-        """Drop every held action.
+        """Drop every held action, on every device.
 
         Called when the window loses focus: the operating system stops delivering key
         releases to an unfocused window, so a key held at the moment focus was lost would
@@ -128,13 +152,39 @@ class HeldActions:
         """
         self._order.clear()
 
+    def clear_device(self, device: int) -> None:
+        """Drop everything held on ``device``, leaving the other devices alone.
+
+        Called when a pad is removed. A device that is gone sends no releases, so its
+        held controls are neutralised here or never.
+        """
+        self._order = [entry for entry in self._order if entry[0] != device]
+
+    def devices(self) -> tuple[int, ...]:
+        """Which devices are contributing, oldest press first, each named once."""
+        return _unique(entry[0] for entry in self._order)
+
     def ordered(self) -> tuple[Action, ...]:
-        """Held actions, oldest press first."""
-        return tuple(self._order)
+        """Held actions, oldest press first, each named once.
+
+        An action held on two devices appears at the position of its most recent press,
+        so recency still decides a facing when a stick and a key disagree.
+        """
+        return _unique(entry[1] for entry in self._order)
 
     def intent(self) -> PlayerIntent:
         """The intent these held actions reduce to."""
-        return intent_from_held(self._order)
+        return intent_from_held(self.ordered())
 
     def __contains__(self, action: object) -> bool:
-        return action in self._order
+        return any(entry[1] == action for entry in self._order)
+
+
+def _unique[T](values: Iterable[T]) -> tuple[T, ...]:
+    """``values`` with duplicates collapsed onto their *last* position."""
+    ordered: list[T] = []
+    for value in values:
+        if value in ordered:
+            ordered.remove(value)
+        ordered.append(value)
+    return tuple(ordered)
