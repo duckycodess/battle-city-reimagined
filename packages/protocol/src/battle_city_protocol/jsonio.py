@@ -48,17 +48,23 @@ class _RejectedConstantError(Exception):
         super().__init__(constant)
 
 
-def decode_json_object(payload: bytes) -> dict[str, JsonValue]:
+def decode_json_object(payload: bytes, *, limit: int = MAX_FRAME_BYTES) -> dict[str, JsonValue]:
     """Decode ``payload`` as a bounded, strictly parsed JSON object.
+
+    ``limit`` is the size bound in bytes and defaults to :data:`MAX_FRAME_BYTES`, which
+    is the bound for a wire frame. A caller that is not reading a frame passes its own:
+    :mod:`battle_city_protocol.replay` reads a stored document, which is larger than a
+    packet and bounded by its own published constant. The hardening below is the same
+    either way, which is the reason this takes a bound rather than being copied.
 
     Raises :class:`~battle_city_protocol.errors.MessageError` with
     :data:`~battle_city_protocol.codes.RejectionCode.FRAME_TOO_LARGE` or
     :data:`~battle_city_protocol.codes.RejectionCode.MALFORMED_FRAME`.
     """
-    if len(payload) > MAX_FRAME_BYTES:
+    if len(payload) > limit:
         raise MessageError(
             RejectionCode.FRAME_TOO_LARGE,
-            f"frame is {len(payload)} bytes, over the limit of {MAX_FRAME_BYTES}",
+            f"frame is {len(payload)} bytes, over the limit of {limit}",
         )
     if payload.startswith(_UTF8_BOM):
         raise MessageError(
@@ -110,12 +116,18 @@ def decode_json_object(payload: bytes) -> dict[str, JsonValue]:
     return document
 
 
-def encode_json_object(document: Mapping[str, JsonValue]) -> bytes:
+def encode_json_object(document: Mapping[str, JsonValue], *, limit: int = MAX_FRAME_BYTES) -> bytes:
     """Encode ``document`` as compact, key-sorted, bounded UTF-8 JSON.
 
     Keys are sorted and separators are fixed so one message always encodes to one byte
     string: two servers that agree on a snapshot agree on its bytes, which makes a
     frame comparable in a test and cacheable for a broadcast.
+
+    ``limit`` is the size bound in bytes and defaults to :data:`MAX_FRAME_BYTES`, which
+    is the bound for a wire frame. It is a parameter for the same reason
+    :func:`decode_json_object` takes one: a caller that is not writing a frame has its
+    own published bound, and a stored document that this function refused at the wire
+    bound would be a document the matching decoder was willing to read.
     """
     text = json.dumps(
         document,
@@ -125,10 +137,10 @@ def encode_json_object(document: Mapping[str, JsonValue]) -> bytes:
         sort_keys=True,
     )
     payload = text.encode("utf-8")
-    if len(payload) > MAX_FRAME_BYTES:
+    if len(payload) > limit:
         raise MessageError(
             RejectionCode.FRAME_TOO_LARGE,
-            f"encoded message is {len(payload)} bytes, over the limit of {MAX_FRAME_BYTES}",
+            f"encoded message is {len(payload)} bytes, over the limit of {limit}",
         )
     return payload
 
