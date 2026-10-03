@@ -406,8 +406,18 @@ class Renderer:
             self.text_centered(
                 surface, recovery[:46], center_x, keys_panel.bottom + 24, self._palette.danger
             )
+        # The card is a fixed table of the keys the build ships, and a remapping makes
+        # some of it untrue. Saying so, in the one line that was already here, is the
+        # smaller and more honest fix than redrawing the card from live bindings: the
+        # options screen already shows every binding as it stands, and a card that
+        # quietly disagreed with it would be the worse of the two.
+        rebound = shell.accessibility.bindings.remapped
         self.text_centered(
-            surface, "OPTIONS REMAPS KEYS AND PAD", center_x, 232, self._palette.text_dim
+            surface,
+            "SOME KEYS REBOUND - SEE OPTIONS" if rebound else "OPTIONS REMAPS KEYS AND PAD",
+            center_x,
+            232,
+            self._palette.danger if rebound else self._palette.text_dim,
         )
         self.text_centered(surface, "ENTER OR ESC RETURNS", center_x, 246, self._palette.text_dim)
 

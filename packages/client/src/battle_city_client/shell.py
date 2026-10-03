@@ -845,13 +845,18 @@ class ClientShell:
 
         A row that is armed for capture does not reach here at all -- the loop hands raw
         input to :meth:`capture_key` and :meth:`capture_control` instead -- except for
-        the cancel, which the loop lets through so the reserved way out keeps working
-        from inside a capture.
+        the two ways out, which the loop lets through so they keep working from inside a
+        capture. Cancel abandons the row; reset puts every preference and binding back.
+        Both are refused *as bindings* for exactly this reason, and both are honoured
+        here rather than only in the loop, so a caller driving the shell directly gets
+        the same guarantee the window does.
         """
         state = self.options
         if state.capturing:
             if action is Action.UI_CANCEL:
                 state.cancel()
+            elif action is Action.OPTION_RESET:
+                self._reset_options()
             return
         match action:
             case Action.UI_UP:

@@ -25,14 +25,19 @@ from accessibility_helpers import (
 )
 from battle_city_client.accessibility import (
     ACTION_LABELS,
+    DEFAULT_GAMEPAD_DEFAULTS,
+    DEFAULT_GAMEPAD_EDGE,
+    DEFAULT_GAMEPAD_HELD,
     REMAPPABLE_ACTIONS,
     RESERVED_ACTIONS,
 )
 from battle_city_client.intents import Action
 from battle_city_client.keymap import (
     DEFAULT_BINDINGS,
+    DEFAULT_KEYS_BY_ACTION,
     MAX_BINDING_SUMMARY,
     RESERVED_KEYS,
+    SHIPPED_TABLES,
     binding_summary,
     edge_action_for,
     held_action_for,
@@ -274,6 +279,87 @@ def test_the_way_out_is_not_on_the_options_screen_at_all(action: Action) -> None
     shell = _open_options()
     assert action not in REMAPPABLE_ACTIONS
     assert all(row.action is not action for row in rows(shell.accessibility))
+
+
+UNREMAPPABLE_SHIPPED_KEYS: tuple[tuple[int, Action, str], ...] = (
+    (pygame.K_r, Action.RESUME_SAVE, "RESUME SAVE"),
+    (pygame.K_m, Action.ONLINE_MODE, "ONLINE MODE"),
+    (pygame.K_l, Action.ONLINE_STAGE, "ONLINE STAGE"),
+)
+"""Keys that drive an action the options screen does not offer a row for.
+
+``R`` resumes the saved stage and is the lobby's ready key, ``M`` and ``L`` are the
+lobby's mode and stage. None of them is rebindable, which is exactly why they used to be
+takeable: the conflict table listed only the remappable actions, so nothing knew these
+keys were spoken for.
+"""
+
+
+@pytest.mark.parametrize(("key", "action", "label"), UNREMAPPABLE_SHIPPED_KEYS)
+def test_a_key_that_drives_an_unremappable_action_cannot_be_taken(
+    key: int, action: Action, label: str
+) -> None:
+    """Regression: binding *confirm* to ``R`` was accepted, and ``R`` then stopped
+    resuming the saved stage with nothing said about it."""
+    shell = _open_options()
+    _arm(shell, Action.UI_CONFIRM)
+    assert not shell.capture_key(key)
+    assert label in shell.options.notice
+    assert shell.capturing
+
+
+@pytest.mark.parametrize(("key", "action", "label"), UNREMAPPABLE_SHIPPED_KEYS)
+def test_an_unremappable_action_keeps_its_key_on_the_screen_that_uses_it(
+    key: int, action: Action, label: str
+) -> None:
+    """The other half: the refusal is what keeps these working, so check they do."""
+    shell = _open_options()
+    screen = Screen.STAGE_SELECT if action is Action.RESUME_SAVE else Screen.ONLINE_LOBBY
+    bindings = shell.accessibility.bindings
+    assert observed(edge_action_for(key, screen, bindings)) is action
+
+
+def test_the_lobby_ready_key_is_spoken_for_too() -> None:
+    """``R`` is two actions on two screens; naming either one is enough to refuse it."""
+    shell = _open_options()
+    _arm(shell, Action.UI_UP)
+    assert not shell.capture_key(pygame.K_r)
+    assert (
+        observed(edge_action_for(pygame.K_r, Screen.ONLINE_LOBBY, shell.accessibility.bindings))
+        is Action.ONLINE_READY
+    )
+
+
+def test_the_conflict_table_covers_every_key_the_build_ships() -> None:
+    """The rule that stops this class of bug coming back, asserted as a rule.
+
+    Every key in every shipped table must be findable in the conflict table, whether or
+    not its action has a row on the options screen. An action missing from it is an
+    action whose keys can be taken without anyone being told.
+    """
+    covered = {key for _, keys in DEFAULT_KEYS_BY_ACTION for key in keys}
+    shipped = {key for table in SHIPPED_TABLES for key in table}
+    assert shipped - covered == set()
+
+
+def test_every_shipped_pad_control_is_spoken_for() -> None:
+    """The same rule on the pad side, where button 1 is the reserved way out."""
+    covered = {control for _, controls in DEFAULT_GAMEPAD_DEFAULTS for control in controls}
+    shipped = set(DEFAULT_GAMEPAD_HELD) | set(DEFAULT_GAMEPAD_EDGE)
+    assert shipped - covered == set()
+
+
+def test_the_pads_back_button_cannot_be_taken_from_the_real_tables() -> None:
+    """Asserted against ``DEFAULT_BINDINGS`` rather than a table built for the test.
+
+    The hand-built version of this passed while the shipped one was wrong, which is how
+    the gap survived: button 1 is ``UI_CANCEL``, ``UI_CANCEL`` is not remappable, and a
+    remappable-only table therefore left it out.
+    """
+    shell = _open_options()
+    _arm(shell, Action.FIRE)
+    assert not shell.capture_control(button(1))
+    assert "ALREADY BACK" in shell.options.notice
 
 
 def test_cancel_keeps_its_keys_whatever_else_is_rebound() -> None:

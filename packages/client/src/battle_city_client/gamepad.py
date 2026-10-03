@@ -163,10 +163,13 @@ class GamepadHub:
         turning each report into a press would make one push look like a hundred, so a
         reading that lands where the last one did produces nothing.
 
-        The order is fixed, not incidental: releases first, then presses, and within each
-        the horizontal axis before the vertical. A caller feeding these into held state
-        would otherwise see a press and a release of the same control resolve by whichever
-        came out first, and the client's rule is that press order decides a facing.
+        The order is fixed, not incidental: axis by axis, horizontal before vertical, and
+        within one axis the release before the press. Per axis is the level that matters,
+        because the release and the press an axis produces are the two sides of one
+        control -- a caller feeding them into held state in the other order would have the
+        press undone by the release it arrived with. Across axes they are independent
+        controls, and presses still come out in axis order, so the recency that decides a
+        facing is the same whichever axis moved first.
         """
         match event.type:
             case pygame.JOYBUTTONDOWN | pygame.JOYBUTTONUP:
@@ -268,7 +271,8 @@ def _transitions(
 
     Zero to a side is one press, a side to zero is one release, and a side straight to
     the other side is both -- in that order, so a caller that feeds these into held
-    state never has a press undone by the release it arrived with.
+    state never has a press undone by the release it arrived with. This is the level the
+    ordering guarantee is made at; see :meth:`GamepadHub.handle_event`.
     """
     events: list[ControlEvent] = []
     if before != 0:

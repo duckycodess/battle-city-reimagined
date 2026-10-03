@@ -318,3 +318,31 @@ def test_every_screen_draws_in_either_palette(palette: theme.Palette) -> None:
             for x in range(0, theme.LOGICAL_SIZE[0], 3)
         }
         assert len(colours) > 2, f"{screen} rendered almost nothing in {palette.background}"
+
+
+def test_the_controls_card_admits_when_its_table_is_out_of_date() -> None:
+    """The card is a fixed list of shipped keys, and a remapping makes some of it untrue.
+
+    It is not redrawn from live bindings -- the options screen already shows every
+    binding as it stands -- but it must stop presenting a stale table as the truth.
+    """
+    from battle_city_client.keymap import DEFAULT_BINDINGS
+
+    shell = make_shell()
+    shell.screen = Screen.CONTROLS
+    before = _rendered(shell)
+
+    shell.accessibility = shell.accessibility.with_bindings(
+        DEFAULT_BINDINGS.with_keyboard(Action.FIRE, 107)
+    )
+    assert shell.accessibility.bindings.remapped
+    assert _rendered(shell) != before
+
+
+def test_the_controls_card_is_unchanged_until_something_is_rebound() -> None:
+    """The committed capture of this screen is taken with nothing rebound, and stays valid."""
+    shell = make_shell()
+    shell.screen = Screen.CONTROLS
+    untouched = make_shell(bindings=False)
+    untouched.screen = Screen.CONTROLS
+    assert _rendered(shell) == _rendered(untouched)

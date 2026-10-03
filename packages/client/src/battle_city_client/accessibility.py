@@ -752,6 +752,18 @@ DEFAULT_GAMEPAD_DEFAULTS: Final[tuple[tuple[Action, tuple[GamepadControl, ...]],
             )
         ),
     )
-    for action in REMAPPABLE_ACTIONS
+    for action in Action
+    if any(
+        bound is action
+        for table in (DEFAULT_GAMEPAD_HELD, DEFAULT_GAMEPAD_EDGE)
+        for bound in table.values()
+    )
 )
-"""Shipped pad controls by action, for the options screen and conflict reporting."""
+"""Shipped pad controls by action, for the options screen and conflict reporting.
+
+Every action, for the reason :data:`battle_city_client.keymap.DEFAULT_KEYS_BY_ACTION`
+gives: a conflict is reported from this table, so an action left out of it is an action
+whose controls can be taken silently. Button 1 is ``UI_CANCEL``, which is reserved and
+is the pad's whole way out of a capture -- and it is not remappable, so it was exactly
+the entry a remappable-only table omitted.
+"""

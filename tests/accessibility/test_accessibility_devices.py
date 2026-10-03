@@ -256,6 +256,24 @@ def test_an_unrelated_event_carries_no_transition(app: ClientApp) -> None:
     assert app.gamepads.handle_event(key_event(pygame.K_a), 25) == ()
 
 
+def test_the_transition_order_is_the_one_the_contract_states(app: ClientApp) -> None:
+    """Axis by axis, horizontal first, and within one axis the release before the press.
+
+    Per axis is the level the guarantee is made at, and the level that matters: the two
+    sides of one control must not arrive press-first, or a caller feeding them into held
+    state has the press undone by the release it came with. Across axes they are
+    independent controls.
+    """
+    hub = app.gamepads
+    hub.handle_event(hat_event(PAD, 0, (1, 1)), 25)
+    events = hub.handle_event(hat_event(PAD, 0, (-1, -1)), 25)
+    assert [event.control.axis for event in events] == [0, 0, 1, 1]
+    for first, second in ((events[0], events[1]), (events[2], events[3])):
+        assert first.control.axis == second.control.axis
+        assert not first.pressed
+        assert second.pressed
+
+
 # -- devices coming and going ----------------------------------------------------
 
 
@@ -443,6 +461,45 @@ def test_the_confirm_key_does_not_leave_the_screen_while_a_row_is_armed(
         pygame.K_SPACE,
         pygame.K_j,
     )
+
+
+def test_the_reset_key_works_from_inside_a_capture(app: ClientApp) -> None:
+    """The recovery path has to work from the state it exists to recover from.
+
+    A player who arms a row and then cannot press the control they meant to bind is on
+    the one screen that can put things back, and ``F5`` is the key that does it. It is
+    reserved from capture precisely so the armed row cannot swallow it.
+    """
+    _arm_the_fire_row(app)
+    app.handle_event(key_event(pygame.K_F5))
+    assert not app.shell.capturing
+    assert "RESET" in app.shell.options.notice
+    assert not app.shell.accessibility.bindings.remapped
+    assert observed(app.shell.screen) is Screen.OPTIONS
+
+
+def test_a_reset_from_inside_a_capture_undoes_the_bindings_already_made(
+    app: ClientApp,
+) -> None:
+    _arm_the_fire_row(app)
+    app.handle_event(key_event(pygame.K_z))
+    assert app.shell.accessibility.bindings.keys_for(Action.FIRE) == (pygame.K_z,)
+    _arm_the_fire_row(app)
+    app.handle_event(key_event(pygame.K_F5))
+    assert app.shell.accessibility.bindings.keys_for(Action.FIRE) == (
+        pygame.K_SPACE,
+        pygame.K_j,
+    )
+
+
+def test_cancel_still_leaves_a_capture_without_resetting_anything(app: ClientApp) -> None:
+    """The two ways out are different: one abandons the row, one puts everything back."""
+    _arm_the_fire_row(app)
+    app.handle_event(key_event(pygame.K_z))
+    _arm_the_fire_row(app)
+    app.handle_event(key_event(pygame.K_ESCAPE))
+    assert not app.shell.capturing
+    assert app.shell.accessibility.bindings.keys_for(Action.FIRE) == (pygame.K_z,)
 
 
 def test_the_pads_are_released_when_the_app_closes(app: ClientApp) -> None:

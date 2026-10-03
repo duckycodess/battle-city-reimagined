@@ -278,8 +278,18 @@ class ClientApp:
             # An armed binding row takes the keystroke whole: translating it first would
             # let the key that is about to become *fire* fire on its way in, and would
             # let the key that is about to become *confirm* leave the screen.
-            if edge_action_for(key, screen, bindings) is Action.UI_CANCEL:
+            #
+            # Two keys are let through, and both are reserved from capture precisely so
+            # they can be: cancel abandons the row, and reset puts every preference and
+            # binding back. They are the way out of a capture, and a way out that only
+            # worked when no row was armed would not be one -- a player who armed a row
+            # with a control they cannot press would otherwise be stuck on the screen
+            # that exists to fix exactly that.
+            armed_edge = edge_action_for(key, screen, bindings)
+            if armed_edge is Action.UI_CANCEL:
                 self.shell.cancel_capture()
+            elif armed_edge is Action.OPTION_RESET:
+                self._apply_edge(armed_edge)
             else:
                 self.shell.capture_key(key)
             return

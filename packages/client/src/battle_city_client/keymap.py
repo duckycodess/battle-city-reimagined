@@ -34,7 +34,6 @@ import pygame
 from .accessibility import (
     DEFAULT_GAMEPAD_DEFAULTS,
     EMPTY_BINDINGS,
-    REMAPPABLE_ACTIONS,
     REMAPPABLE_EDGE_ACTIONS,
     REMAPPABLE_HELD_ACTIONS,
     BindingSet,
@@ -157,31 +156,40 @@ are handled by the loop on every screen, so a key that was both would resize the
 while it drove a tank.
 """
 
+SHIPPED_TABLES: Final[tuple[Mapping[int, Action], ...]] = (
+    HELD_BINDINGS,
+    PLAY_EDGE_BINDINGS,
+    MENU_EDGE_BINDINGS,
+    PAUSE_EDGE_BINDINGS,
+    STAGE_SELECT_EDGE_BINDINGS,
+    LOBBY_EDGE_BINDINGS,
+    OPTIONS_EDGE_BINDINGS,
+    WINDOW_EDGE_BINDINGS,
+)
+"""Every keycode table this build ships, in one place for the gathering below."""
+
 DEFAULT_KEYS_BY_ACTION: Final[tuple[tuple[Action, tuple[int, ...]], ...]] = tuple(
     (
         action,
         tuple(
             sorted(
-                {
-                    key
-                    for table in (
-                        HELD_BINDINGS,
-                        PLAY_EDGE_BINDINGS,
-                        MENU_EDGE_BINDINGS,
-                        PAUSE_EDGE_BINDINGS,
-                        STAGE_SELECT_EDGE_BINDINGS,
-                        LOBBY_EDGE_BINDINGS,
-                        OPTIONS_EDGE_BINDINGS,
-                    )
-                    for key, bound in table.items()
-                    if bound is action
-                }
+                {key for table in SHIPPED_TABLES for key, bound in table.items() if bound is action}
             )
         ),
     )
-    for action in REMAPPABLE_ACTIONS
+    for action in Action
+    if any(bound is action for table in SHIPPED_TABLES for bound in table.values())
 )
-"""Every shipped key for every remappable action, gathered from all the tables.
+"""Every shipped key for **every** action, gathered from every table.
+
+Every action, not only the remappable ones, and that distinction is the whole point.
+A conflict is reported from this table, so an action missing from it is an action whose
+keys can be taken without anyone being told. ``R`` resumes a saved stage and is also the
+lobby's ready key, ``M`` and ``L`` are the lobby's mode and stage -- none of those is
+rebindable, so leaving them out looked harmless. It was not: binding *confirm* to ``R``
+was accepted, and :func:`~battle_city_client.accessibility.resolved_table` then struck
+``R`` out of the stage list for being taken. The saved stage became unreachable and
+nothing said so.
 
 Gathered rather than written out, so a key added to a table above is a key the options
 screen reports and a key a conflict can name, with nobody having to remember this list.
