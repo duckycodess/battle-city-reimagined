@@ -29,6 +29,8 @@ from battle_city_protocol import (
 from battle_city_protocol.validation import require_token
 from battle_city_sim import DEFAULT_RULES, Rules, Stage
 
+from .spectator import DEFAULT_MAX_OBSERVERS
+
 DEFAULT_TICK_RATE: Final[int] = 60
 
 
@@ -110,6 +112,14 @@ class SessionLimits:
     idle connection waiting between frames.
     """
 
+    max_observers: int = DEFAULT_MAX_OBSERVERS
+    """In-process spectators and recorders one session will deliver its output to.
+
+    An observer is not a connection and holds no slot, so it is bounded separately and
+    is not counted against :attr:`max_connections`. Zero turns the seam off entirely.
+    See :mod:`battle_city_server.spectator`.
+    """
+
     def __post_init__(self) -> None:
         for name in (
             "max_batches_per_tick",
@@ -125,6 +135,8 @@ class SessionLimits:
         for name in ("join_deadline_seconds", "frame_deadline_seconds"):
             if getattr(self, name) <= 0.0:
                 raise ServerConfigurationError(f"limits.{name} must be positive")
+        if self.max_observers < 0:
+            raise ServerConfigurationError("limits.max_observers must not be negative")
 
 
 DEFAULT_LIMITS: Final[SessionLimits] = SessionLimits()
