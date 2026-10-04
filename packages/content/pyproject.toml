@@ -13,4 +13,4 @@ build-backend = "hatchling.build"
 packages = ["src/battle_city_content"]
 
 [tool.hatch.build]
-include = ["src/battle_city_content/**/*.json", "src/battle_city_content/**/*.py"]
+include = ["src/battle_city_content"]

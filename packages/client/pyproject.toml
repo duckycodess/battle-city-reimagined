@@ -10,6 +10,10 @@ dependencies = [
   "pygame-ce>=2.5.8,<3",
 ]
 
+[project.scripts]
+battle-city-client = "battle_city_client.app:main"
+battle-city-editor = "battle_city_client.editor.app:main"
+
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
