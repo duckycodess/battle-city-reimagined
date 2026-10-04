@@ -254,16 +254,25 @@ def resolve_pack(reference: str) -> Pack:
         raise StageAdapterError(f"{reference}: {error}") from error
 
 
-def _pack_root(manifest: Path) -> Path:
-    """The directory a manifest's level paths are relative to, and may not escape.
+def _pack_root(manifest: Path) -> Path | None:
+    """The root a manifest's level paths resolve against, or ``None`` for the default.
 
-    A manifest filed in a ``packs/`` directory declares its levels as ``levels/<id>.json``
-    beside it, which is the layout the bundled content uses and the layout
-    ``battle_city_tools export`` writes; its root is therefore the shared parent. Anything
-    else keeps the loader's own default, the manifest's own directory, which is the safe
-    answer for a pack whose layout this build has never seen.
+    The packaged content files its manifests in ``packs/`` beside a sibling ``levels/``
+    directory, so a *bundled* manifest's levels resolve against their shared parent. That
+    layout is a fact about this package rather than a convention a path can be read for.
+    Deciding it from the directory's name instead would reject a perfectly valid external
+    pack for being filed in a directory that happens to be called ``packs``: an outside
+    ``/foo/packs/demo.json`` saying ``levels/stage.json`` means ``/foo/packs/levels``, the
+    layout :func:`~battle_city_content.load_pack` documents as its default. So only a
+    manifest that really is inside the packaged content gets the shared root, and every
+    other path keeps the loader's own default -- the manifest's own directory, which is
+    the safe answer for a pack whose layout this build has never seen.
     """
-    return manifest.parent.parent if manifest.parent.name == "packs" else manifest.parent
+    try:
+        bundled = bundled_content_root().resolve()
+    except ContentError:
+        return None
+    return bundled if manifest.resolve().is_relative_to(bundled) else None
 
 
 def pack_stage_catalog(reference: str) -> tuple[StageEntry, ...]:
