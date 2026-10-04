@@ -49,7 +49,7 @@ scene scripts in `assets/blender/`. Every mesh, material and light is authored b
 `build_scene.py` in this repository. No artwork, texture or sheet from the historical
 repository was copied, traced or re-encoded, and no generated image is a runtime
 dependency — the art pipeline specification permits generated images as concept
-references only, and none were used as a source. Six source records in `atlas.json` name
+references only, and none were used as a source. Five source records in `atlas.json` name
 the scene, the build script, the render script and the collection behind every frame.
 
 The render environment, the pinned Cycles settings and the reproducibility measurements
