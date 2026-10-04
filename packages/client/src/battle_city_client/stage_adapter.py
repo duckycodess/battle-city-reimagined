@@ -30,9 +30,18 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Final
 
-from battle_city_content import ContentError, GridCell, Level, Pack, load_bundled_pack
+from battle_city_content import (
+    ContentError,
+    GridCell,
+    Level,
+    Pack,
+    bundled_content_root,
+    load_bundled_pack,
+    load_pack,
+)
 from battle_city_protocol import ContentRef, JsonValue, encode_json_object
 from battle_city_sim import (
     DEFAULT_RULES,
@@ -194,12 +203,78 @@ def stage_catalog(pack: Pack) -> tuple[StageEntry, ...]:
 def bundled_stage_catalog() -> tuple[StageEntry, ...]:
     """Load the bundled classic pack and adapt it.
 
-    This is the only function here that reads the filesystem. A content failure is
-    re-raised as :class:`StageAdapterError` so a caller that is wiring up a menu has one
-    exception type to report, with the loader's file-and-field message preserved.
+    A content failure is re-raised as :class:`StageAdapterError` so a caller that is
+    wiring up a menu has one exception type to report, with the loader's file-and-field
+    message preserved.
     """
     try:
         pack = load_bundled_pack()
     except ContentError as error:
         raise StageAdapterError(f"bundled pack: {error}") from error
     return stage_catalog(pack)
+
+
+def bundled_pack_path(pack_id: str) -> Path | None:
+    """Return the manifest a bundled pack identifier names, or ``None``.
+
+    A bundled identifier is spelled the way a pack identifier is spelled -- lower-case
+    words joined by hyphens -- and resolves to ``packs/<id>.json`` inside the packaged
+    content. The check is a file test rather than a list, so this never has to be kept in
+    step with what the content package ships, and anything that is not a plain identifier
+    is refused before it can become a path.
+    """
+    if not pack_id or not all(part.isalnum() and part.islower() for part in pack_id.split("-")):
+        return None
+    candidate = bundled_content_root() / "packs" / f"{pack_id}.json"
+    return candidate if candidate.is_file() else None
+
+
+def resolve_pack(reference: str) -> Pack:
+    """Load the pack ``reference`` names: a manifest path, or a bundled pack identifier.
+
+    The identifier form exists so a player can reach a pack that ships inside the
+    installed package without first finding where the install put it. A path always wins:
+    a file that exists is loaded as itself, so a directory of packs named after bundled
+    ones cannot be shadowed by this convenience.
+
+    Raises :class:`StageAdapterError` naming the reference, because this is a launch
+    option a person typed and the fix is to retype it.
+    """
+    path = Path(reference)
+    if not path.is_file():
+        bundled = bundled_pack_path(reference)
+        if bundled is None:
+            raise StageAdapterError(
+                f"{reference!r} is neither a pack manifest nor a bundled pack identifier"
+            )
+        path = bundled
+    try:
+        return load_pack(path, root=_pack_root(path))
+    except ContentError as error:
+        raise StageAdapterError(f"{reference}: {error}") from error
+
+
+def _pack_root(manifest: Path) -> Path | None:
+    """The root a manifest's level paths resolve against, or ``None`` for the default.
+
+    The packaged content files its manifests in ``packs/`` beside a sibling ``levels/``
+    directory, so a *bundled* manifest's levels resolve against their shared parent. That
+    layout is a fact about this package rather than a convention a path can be read for.
+    Deciding it from the directory's name instead would reject a perfectly valid external
+    pack for being filed in a directory that happens to be called ``packs``: an outside
+    ``/foo/packs/demo.json`` saying ``levels/stage.json`` means ``/foo/packs/levels``, the
+    layout :func:`~battle_city_content.load_pack` documents as its default. So only a
+    manifest that really is inside the packaged content gets the shared root, and every
+    other path keeps the loader's own default -- the manifest's own directory, which is
+    the safe answer for a pack whose layout this build has never seen.
+    """
+    try:
+        bundled = bundled_content_root().resolve()
+    except ContentError:
+        return None
+    return bundled if manifest.resolve().is_relative_to(bundled) else None
+
+
+def pack_stage_catalog(reference: str) -> tuple[StageEntry, ...]:
+    """Adapt every level of the pack ``reference`` names. See :func:`resolve_pack`."""
+    return stage_catalog(resolve_pack(reference))

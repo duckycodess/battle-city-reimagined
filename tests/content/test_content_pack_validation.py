@@ -178,12 +178,12 @@ def test_a_manifest_id_that_disagrees_with_the_level_is_rejected(tmp_path: Path)
     assert "'synthetic-02'" in error.message
 
 
-@pytest.mark.parametrize("version", [2, 7, 1000])
+@pytest.mark.parametrize("version", [3, 7, 1000])
 def test_an_unsupported_content_schema_version_is_rejected(tmp_path: Path, version: int) -> None:
     manifest = build_pack(tmp_path, manifest=synthetic_manifest(content_schema_version=version))
     error = reject_pack(manifest, root=tmp_path)
     assert error.field == "content_schema_version"
-    assert error.message == (f"requires level schema version {version}; this build supports 1")
+    assert error.message == (f"requires level schema version {version}; this build supports 1, 2")
 
 
 @pytest.mark.parametrize(

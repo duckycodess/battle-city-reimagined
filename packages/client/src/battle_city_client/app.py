@@ -75,7 +75,12 @@ from .persistence import (
 from .rendering import Renderer
 from .session import DEFAULT_SEED
 from .shell import ClientShell
-from .stage_adapter import StageAdapterError, bundled_content_ref, bundled_stage_catalog
+from .stage_adapter import (
+    StageAdapterError,
+    bundled_content_ref,
+    bundled_stage_catalog,
+    pack_stage_catalog,
+)
 from .timing import NOMINAL_TICK_RATE, FixedTickAccumulator
 
 WINDOW_CAPTION: str = "Battle City Reimagined"
@@ -500,10 +505,11 @@ def build_app(
     assets: AssetLibrary | None = None,
     online: OnlineConfig | None = None,
     profile: LocalProfile | None = None,
+    pack: str | None = None,
     accessibility: AccessibilityPreferences | None = None,
     gamepads: GamepadHub | None = None,
 ) -> ClientApp:
-    """Load the bundled stages, open a window and wire the client together.
+    """Load the stages, open a window and wire the client together.
 
     A display must already be initialised. :func:`main` does that; a test does it with
     the dummy driver.
@@ -516,6 +522,11 @@ def build_app(
     disk. :func:`main` is the only caller that attaches a store, because only a real
     launch has a player whose settings and progress are worth keeping; a test, an
     embedding or a headless run gets the same client with its persistence in memory.
+
+    ``pack`` names a pack to play instead of the bundled classic one -- a manifest path or
+    a bundled pack identifier, as :func:`~battle_city_client.stage_adapter.resolve_pack`
+    reads it. The default menu stays the three classic stages whatever else is installed,
+    because a menu that grew an entry on its own would change what a campaign save means.
 
     ``accessibility`` defaults to the shipped preferences carrying the real key tables,
     which is what lets the options screen say what a control is bound to and refuse a
@@ -530,7 +541,7 @@ def build_app(
         else AccessibilityPreferences(bindings=DEFAULT_BINDINGS)
     )
     shell = ClientShell(
-        catalog=bundled_stage_catalog(),
+        catalog=bundled_stage_catalog() if pack is None else pack_stage_catalog(pack),
         seed=seed,
         rules=rules,
         online_config=online,
@@ -624,6 +635,15 @@ def parse_args(
         default=None,
         metavar="PACK@VERSION/LEVEL#SCHEMA",
         help="content this client claims to be running; the bundled pack by default",
+    )
+    parser.add_argument(
+        "--pack",
+        default=None,
+        metavar="PATH|PACK_ID",
+        help=(
+            "play a pack manifest, or a pack shipped inside the content package by its "
+            "identifier (for example gimmick-demo); the default menu is the classic three"
+        ),
     )
     return parser.parse_args(argv)
 
@@ -748,6 +768,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 frame_cap=options.frame_cap,
                 online=online,
                 profile=profile,
+                pack=options.pack,
             )
         except StageAdapterError as error:
             print(f"battle_city_client: {error}")

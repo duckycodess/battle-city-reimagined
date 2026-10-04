@@ -9,15 +9,22 @@ keeps showing the base even if the terrain pass ever stops special-casing it.
 
 What the editor draws on top of the art is editor furniture, and none of it is a rule:
 a grid rule so cells can be counted, a marker on every spawn naming its slot, a cursor on
-the hovered cell, an outline on the cell a validation error blames, and a status bar
-saying whether the document is valid, dirty, and where a save would go.
+the hovered cell, an outline on the cell a validation error blames, an outline on each
+teleport pad while the pair is incomplete, and a status bar saying whether the document is
+valid, dirty, and where a save would go.
+
+The pad outline is the one piece of furniture that anticipates a verdict rather than
+reporting one, and it is deliberately not a validation: an author part-way through placing
+a pair has one pad on the board and is not wrong yet, so the editor points at the cells
+rather than declaring the document invalid. The loader still has the last word, at
+``V`` and at save.
 """
 
 from __future__ import annotations
 
 import pygame
-from battle_city_content import TileCode
-from battle_city_sim import Tile
+from battle_city_content import TELEPORT_PAIR_SIZE, TileCode
+from battle_city_sim import TILE_BY_CHAR, Tile
 
 from .. import theme
 from ..assets import AssetLibrary
@@ -25,13 +32,18 @@ from ..glyphs import line_step, text_width
 from . import layout
 from .state import TOOL_LABELS, EditorState, error_cell
 
-TILE_ART: dict[str, Tile] = {code.value: Tile(int(code.value)) for code in TileCode}
+TILE_ART: dict[str, Tile] = {code.value: TILE_BY_CHAR[code.value] for code in TileCode}
 """The simulation tile each content tile code depicts.
 
-The two packages keep separate vocabularies on purpose -- the simulation may not import
-a project package -- and both are the classic encoding, so the join is the code itself.
-Built here rather than assumed cell by cell, so a vocabulary that ever stopped agreeing
-fails on import instead of drawing the wrong terrain.
+The two packages keep separate vocabularies on purpose -- the simulation may not import a
+project package -- so the join is the row character, which both of them publish. Built
+here rather than assumed cell by cell, so a vocabulary that ever stopped agreeing raises
+a :class:`KeyError` on import instead of drawing the wrong terrain.
+
+The join is deliberately *not* ``Tile(int(code.value))``. That worked only while every
+tile code was a decimal digit; the conveyor and pad codes are ``9``, ``A``, ``B``, ``C``
+and ``D``, so converting a code to an integer would raise on four of them and, worse,
+would map ``"9"`` by numeric value rather than by what the character means.
 """
 
 NAME_LIMIT: int = 14
@@ -45,7 +57,7 @@ SPAWN_PLAYER: theme.Color = theme.PLAYER_TANK
 SPAWN_ENEMY: theme.Color = theme.ENEMY_TANK
 
 KEY_HELP: tuple[tuple[str, str], ...] = (
-    ("0-8", "TILE"),
+    ("0-9", "TILE"),
     ("B", "PAINT"),
     ("P", "PLAYER"),
     ("E", "ENEMY"),
@@ -157,6 +169,11 @@ class EditorRenderer:
 
         self._draw_spawns(surface, state)
 
+        pads = document.teleport_pads
+        if len(pads) not in (0, TELEPORT_PAIR_SIZE):
+            for pad in pads:
+                pygame.draw.rect(surface, theme.DANGER, pygame.Rect(layout.cell_rect(pad)), 1)
+
         highlight = error_cell(state.diagnostic)
         if highlight is not None and document.contains(highlight):
             pygame.draw.rect(surface, theme.DANGER, pygame.Rect(layout.cell_rect(highlight)), 2)
@@ -198,14 +215,14 @@ class EditorRenderer:
                 if tile is TileCode.HOME
                 else self.assets.tile(TILE_ART[tile.value])
             )
-            surface.blit(art, (rect.x + 3, rect.y + 3))
+            surface.blit(art, (rect.x + layout.SWATCH_INSET, rect.y + layout.SWATCH_INSET))
             chosen = index == state.tile_index
             pygame.draw.rect(
                 surface, theme.ACCENT if chosen else theme.PANEL_EDGE, rect, 2 if chosen else 1
             )
             self.text(surface, tile.value, (rect.x + 1, rect.y + 1), theme.TEXT)
 
-        y = layout.PALETTE_ORIGIN[1] + layout.PALETTE_SPAN[1] + 8
+        y = layout.PALETTE_ORIGIN[1] + layout.PALETTE_SPAN[1] + 6
         document = state.document
         readings: tuple[tuple[str, str], ...] = (
             ("TILE", state.selected_tile.name),
@@ -213,6 +230,8 @@ class EditorRenderer:
             ("SLOT", str(state.active_slot)),
             ("PLAY", str(len(document.player_spawns))),
             ("FOE", str(len(document.enemy_spawns))),
+            ("PADS", str(len(document.teleport_pads))),
+            ("VER", str(document.effective_schema_version)),
         )
         for label, value in readings:
             self.text(surface, label, (left, y), theme.TEXT_DIM)

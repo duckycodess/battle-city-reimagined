@@ -70,7 +70,13 @@ from .config import (
     SessionConfig,
     SessionLimits,
 )
-from .content import content_ref_for, rules_digest, stage_from_level
+from .content import (
+    UnspeakableTerrainError,
+    content_ref_for,
+    require_speakable_terrain,
+    rules_digest,
+    stage_from_level,
+)
 from .lobby import (
     OFFERED_MODES,
     PLAYABLE_MODES,
@@ -170,6 +176,7 @@ __all__ = [
     "TickClock",
     "TickRecorder",
     "TooManyObserversError",
+    "UnspeakableTerrainError",
     "UntranslatableEventError",
     "WIRE_FACINGS",
     "check_recording_bounds",
@@ -186,6 +193,7 @@ __all__ = [
     "replay_command",
     "replay_commands",
     "replay_metadata",
+    "require_speakable_terrain",
     "required_checkpoints",
     "rules_digest",
     "serve_tcp",

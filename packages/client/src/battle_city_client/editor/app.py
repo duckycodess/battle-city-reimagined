@@ -51,8 +51,15 @@ TILE_KEYS: Final[Mapping[int, int]] = {
     pygame.K_6: 6,
     pygame.K_7: 7,
     pygame.K_8: 8,
+    pygame.K_9: 9,
 }
-"""Tile codes are typed as themselves: ``2`` selects brick, which is what ``2`` means."""
+"""Tile codes are typed as themselves: ``2`` selects brick, which is what ``2`` means.
+
+Only the digits. The conveyor codes ``A``, ``B`` and ``C`` and the pad code ``D`` have no
+key here on purpose: ``B`` and ``E`` are already the paint and enemy-spawn tools, and a
+palette that quietly took one would break the tool the author meant to press. Those four
+are reached by clicking their swatch, which every tile has anyway.
+"""
 
 TOOL_KEYS: Final[Mapping[int, Tool]] = {
     pygame.K_b: Tool.PAINT,

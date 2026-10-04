@@ -14,7 +14,18 @@ from tools_helpers import (
 def test_the_palette_is_the_whole_tile_vocabulary() -> None:
     """A tile the loader accepts but the editor cannot paint is a level nobody can author."""
     assert tuple(TileCode) == layout.PALETTE_TILES
-    assert [tile.value for tile in layout.PALETTE_TILES] == [str(code) for code in range(9)]
+    assert [tile.value for tile in layout.PALETTE_TILES] == list("0123456789ABCD")
+
+
+def test_the_palette_stays_inside_the_panel_as_the_vocabulary_grows() -> None:
+    """Fourteen swatches have to fit beside the readings and the key help, not under them."""
+    panel_x, panel_y, panel_w, panel_h = layout.panel_rect()
+    span_w, span_h = layout.PALETTE_SPAN
+    assert layout.PALETTE_ORIGIN[0] + span_w <= panel_x + panel_w
+    assert layout.PALETTE_ORIGIN[1] + span_h < panel_y + panel_h
+    assert len(layout.PALETTE_TILES) <= layout.PALETTE_ROWS * layout.SWATCH_COLUMNS
+    assert layout.SWATCH_INSET >= 0
+    assert layout.SWATCH_SIZE >= layout.TILE_SIZE
 
 
 def test_the_frame_holds_the_grid_the_panel_and_the_status_bar() -> None:

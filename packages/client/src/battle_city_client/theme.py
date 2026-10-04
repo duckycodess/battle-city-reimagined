@@ -82,6 +82,22 @@ MIRROR_DARK: Final[Color] = (120, 132, 156)
 HOME: Final[Color] = (238, 214, 120)
 HOME_DARK: Final[Color] = (146, 118, 40)
 
+CONVEYOR: Final[Color] = (74, 80, 96)
+CONVEYOR_RIB: Final[Color] = (112, 120, 142)
+CONVEYOR_ARROW: Final[Color] = (236, 240, 248)
+PAD: Final[Color] = (36, 60, 72)
+PAD_RING: Final[Color] = (150, 206, 226)
+PAD_LINK: Final[Color] = (240, 246, 250)
+"""The opt-in gimmick terrain.
+
+Hue is doing no work here. A conveyor is read from the arrow it carries and the ribs it
+is drawn on, a pad from a two-ended link between two bright corners, and all five are
+separated from each other and from the nine classic tiles by brightness alone -- which
+``tests/client`` asserts, by comparing coarse luminance fingerprints rather than colours.
+Nothing animates: the accessibility specification asks for cues that survive reduced
+motion, and a belt that only reads as a belt while it is scrolling does not.
+"""
+
 PLAYER_TANK: Final[Color] = (108, 198, 244)
 PLAYER_TANK_DARK: Final[Color] = (44, 118, 168)
 ENEMY_TANK: Final[Color] = (236, 108, 96)
@@ -149,6 +165,13 @@ class Palette:
     home: Color = HOME
     home_dark: Color = HOME_DARK
 
+    conveyor: Color = CONVEYOR
+    conveyor_rib: Color = CONVEYOR_RIB
+    conveyor_arrow: Color = CONVEYOR_ARROW
+    pad: Color = PAD
+    pad_ring: Color = PAD_RING
+    pad_link: Color = PAD_LINK
+
     player_tank: Color = PLAYER_TANK
     player_tank_dark: Color = PLAYER_TANK_DARK
     enemy_tank: Color = ENEMY_TANK
@@ -190,6 +213,12 @@ HIGH_CONTRAST_PALETTE: Final[Palette] = Palette(
     mirror_dark=(96, 96, 96),
     home=(255, 224, 0),
     home_dark=(128, 96, 0),
+    conveyor=(24, 24, 24),
+    conveyor_rib=(128, 128, 128),
+    conveyor_arrow=(255, 255, 255),
+    pad=(0, 32, 48),
+    pad_ring=(128, 208, 255),
+    pad_link=(255, 255, 255),
     player_tank=(96, 224, 255),
     player_tank_dark=(0, 96, 160),
     enemy_tank=(255, 112, 96),

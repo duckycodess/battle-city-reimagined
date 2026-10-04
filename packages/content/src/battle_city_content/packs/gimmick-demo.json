@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "gimmick-demo",
+  "version": "1.0.0",
+  "name": "Gimmick demo",
+  "content_schema_version": 2,
+  "authors": [
+    "Battle City Reimagined contributors"
+  ],
+  "license": {
+    "spdx_id": "NOASSERTION",
+    "notice": "This sample pack is original to the rebuild and is not converted from the historical duckycodess/Battle-City stage data. It exists so the opt-in level schema version 2 terrain -- directional conveyors and one teleport pair -- can be loaded, played and captured without touching the three classic stages, which are the project's regression fixtures. NOASSERTION matches the classic pack rather than claiming a licence this project has not chosen for its content."
+  },
+  "levels": [
+    {
+      "id": "gimmick-demo-01",
+      "path": "levels/gimmick-demo-01.json"
+    }
+  ]
+}

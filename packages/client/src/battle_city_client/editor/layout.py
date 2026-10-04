@@ -44,16 +44,29 @@ LOGICAL_SIZE: Final[tuple[int, int]] = (
 """The editor's own frame. The game's frame is a different size and stays that way."""
 
 PALETTE_TILES: Final[tuple[TileCode, ...]] = tuple(TileCode)
-"""Every tile code the content specification defines, ``0`` through ``8``, in that order.
+"""Every tile code the content specification defines, in code order.
 
 The palette is the vocabulary itself rather than a chosen subset: a tile the loader
-accepts but the editor cannot paint would be a level nobody could author here.
+accepts but the editor cannot paint would be a level nobody could author here. That now
+includes the five opt-in codes -- four conveyors and a teleport pad -- which are reached
+by clicking a swatch. Only ``9`` also has a digit shortcut; ``A`` to ``D`` do not get
+letter keys, because ``B``, ``E`` and others are already tool keys and a palette that
+silently stole one would break the tool the author meant to press.
 """
 
-SWATCH_SIZE: Final[int] = 22
-SWATCH_GAP: Final[int] = 4
-SWATCH_COLUMNS: Final[int] = 3
-PALETTE_ORIGIN: Final[tuple[int, int]] = (PANEL_ORIGIN[0] + 6, PANEL_ORIGIN[1] + 18)
+SWATCH_SIZE: Final[int] = 20
+SWATCH_GAP: Final[int] = 3
+SWATCH_COLUMNS: Final[int] = 5
+SWATCH_INSET: Final[int] = (SWATCH_SIZE - TILE_SIZE) // 2
+"""Where a tile sits inside its swatch. The swatch is the tile plus a selectable border.
+
+Five narrower columns rather than three wider ones: the vocabulary grew from nine codes
+to fourteen, and three columns would have needed five rows, pushing the readings and the
+key help off the bottom of a panel whose height is the playfield's. Five columns keep the
+palette three rows deep, so everything below it moved *up* and the frame did not change
+size at all.
+"""
+PALETTE_ORIGIN: Final[tuple[int, int]] = (PANEL_ORIGIN[0] + 6, PANEL_ORIGIN[1] + 16)
 
 PALETTE_ROWS: Final[int] = (len(PALETTE_TILES) + SWATCH_COLUMNS - 1) // SWATCH_COLUMNS
 PALETTE_SPAN: Final[tuple[int, int]] = (

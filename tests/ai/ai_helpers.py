@@ -34,6 +34,7 @@ from battle_city_sim import (
     Tile,
     new_game,
     step,
+    tile_code_char,
 )
 
 GRID_SIZE = 16
@@ -54,7 +55,7 @@ def rows(
     cells[base.y][base.x] = Tile.HOME
     for cell, tile in (overrides or {}).items():
         cells[cell.y][cell.x] = tile
-    return tuple("".join(str(tile.value) for tile in row) for row in cells)
+    return tuple("".join(tile_code_char(tile) for tile in row) for row in cells)
 
 
 def arena(

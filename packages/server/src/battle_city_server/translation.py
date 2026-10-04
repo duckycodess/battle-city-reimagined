@@ -61,6 +61,7 @@ from battle_city_sim import (
     TankMoved,
     TileDamaged,
     state_hash,
+    tile_code_char,
 )
 
 DIRECTIONS: dict[DirectionCode, Direction] = {
@@ -202,8 +203,16 @@ def snapshot_of(
 
 
 def grid_rows(state: SimulationState) -> tuple[str, ...]:
-    """Return the terrain as the content package's tile-code rows."""
-    return tuple("".join(str(tile.value) for tile in row) for row in state.grid.rows)
+    """Return the terrain as the content package's tile-code rows.
+
+    The row character comes from the simulation's explicit tile-code table, never from
+    ``str(tile.value)``: ``Tile.CONVEYOR_E`` is value 10, so deriving the character would
+    send a 17-column row for a 16-column board and quietly shift every cell after it.
+    Which codes a session may legitimately send is a separate question, settled once
+    against the agreed content version in
+    :func:`~battle_city_server.content.require_speakable_terrain`.
+    """
+    return tuple("".join(tile_code_char(tile) for tile in row) for row in state.grid.rows)
 
 
 def protocol_events(events: Sequence[Event]) -> tuple[GameEvent, ...]:

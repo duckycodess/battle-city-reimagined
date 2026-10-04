@@ -34,6 +34,9 @@ from battle_city_client import (  # noqa: E402
     StageSession,
     theme,
 )
+from battle_city_client.editor import layout as editor_layout  # noqa: E402
+from battle_city_client.editor.render import EditorRenderer  # noqa: E402
+from battle_city_client.editor.state import EditorState  # noqa: E402
 from battle_city_client.stage_adapter import StageEntry  # noqa: E402
 from battle_city_content import (  # noqa: E402
     GridCell,
@@ -53,6 +56,7 @@ from battle_city_sim import (  # noqa: E402
     SimulationState,
     Stage,
     Tile,
+    tile_code_char,
 )
 
 SCREENSHOT_DIR: Path = Path(__file__).parent / "screenshots"
@@ -106,7 +110,7 @@ def rows_with(
     grid = [[fill for _ in range(16)] for _ in range(16)]
     for (x, y), tile in overrides.items():
         grid[y][x] = tile
-    return tuple("".join(str(tile.value) for tile in row) for row in grid)
+    return tuple("".join(tile_code_char(tile) for tile in row) for row in grid)
 
 
 def make_stage(
@@ -261,6 +265,33 @@ def capture(
         _stamp_fixture_banner(surface)
     scaled = pygame.transform.scale(
         surface, (theme.LOGICAL_SIZE[0] * scale, theme.LOGICAL_SIZE[1] * scale)
+    )
+    path = directory / f"{name}.png"
+    pygame.image.save(scaled, str(path))
+    return path
+
+
+def capture_editor_state(
+    state: EditorState,
+    name: str,
+    *,
+    directory: Path,
+    scale: int = 2,
+) -> Path:
+    """Render one real editor frame and write a PNG.
+
+    The editor draws its own logical frame -- wider than the game's, because it carries a
+    tool panel -- so this cannot go through :func:`capture`. Everything else is the same:
+    a real :class:`~battle_city_client.editor.render.EditorRenderer` over the same
+    procedural art the game uses, with nothing drawn on top by the test.
+    """
+    ensure_display()
+    directory.mkdir(parents=True, exist_ok=True)
+    surface = pygame.Surface(editor_layout.LOGICAL_SIZE)
+    EditorRenderer(ProceduralAssetLibrary(DEFAULT_RULES)).render(surface, state)
+    scaled = pygame.transform.scale(
+        surface,
+        (editor_layout.LOGICAL_SIZE[0] * scale, editor_layout.LOGICAL_SIZE[1] * scale),
     )
     path = directory / f"{name}.png"
     pygame.image.save(scaled, str(path))

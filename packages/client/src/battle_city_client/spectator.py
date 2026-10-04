@@ -127,10 +127,17 @@ class SpectatorView:
         A keyframe replaces the terrain; a snapshot before the first keyframe is not
         renderable and is dropped, which cannot happen through
         :meth:`opened` and can only happen to a view driven by hand.
+
+        A keyframe's rows are read in the content version the session's terms name, the
+        same gate a player's view applies. A watcher is a reader of the same wire as a
+        player and gets no wider alphabet for being one: terrain this build's agreed
+        version does not define is refused here rather than drawn as something else.
         """
         try:
             if snapshot.grid is not None:
-                terrain = terrain_from_rows(snapshot.grid)
+                terrain = terrain_from_rows(
+                    snapshot.grid, content_schema_version=self._content_schema_version()
+                )
             elif self._board is not None:
                 terrain = self._board.grid
             else:
@@ -138,6 +145,20 @@ class SpectatorView:
             self._board = board_from_snapshot(snapshot, terrain)
         except RemoteStateError as error:
             self._notice = f"SERVER STATE UNREADABLE: {error}"
+
+    def _content_schema_version(self) -> int:
+        """The content version the session's terms agreed to.
+
+        A view that was handed a keyframe before its terms has agreed to nothing, so it
+        refuses rather than guessing a version -- which only a hand-driven view can
+        reach, because :meth:`opened` delivers the terms and the keyframe together.
+        """
+        session = self._session
+        if session is None:
+            raise RemoteStateError(
+                "keyframe grid: arrived before the session terms naming its content version"
+            )
+        return session.content.content_schema_version
 
     def _apply_damage(self, events: TickEvents) -> None:
         """Keep the terrain current between keyframes, exactly as a player's view does."""

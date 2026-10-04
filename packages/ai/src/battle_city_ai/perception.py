@@ -15,6 +15,20 @@ the engine refuses. :func:`predicted_pose` therefore mirrors ``step._phase_move`
 the clamp at the world edge, and :func:`shot_target_id` walks a projectile at
 ``rules.projectile_speed`` from the real muzzle pixel.
 
+Gimmick terrain is predicted, not planned around
+------------------------------------------------
+:func:`predicted_pose` mirrors the whole of ``step._phase_move``, which since the
+accepted ``gimmicks-v1`` change includes a conveyor push and a teleport arrival. It reads
+the engine's own arithmetic out of :mod:`battle_city_sim.gimmicks` rather than
+reimplementing it, because a second copy of the displacement rules is one edit away from
+a bot that believes in moves the engine refuses.
+
+Both additions are guarded by single cell lookups that no classic tile satisfies, so a
+grid with no gimmick terrain costs one dictionary miss per call and produces byte-identical
+decisions. What this does *not* add is a route planner: the policy still roams and
+measures clearance, so a bot rides a belt it happens to be standing on and declines an
+arrival whose destination is occupied, but it does not go looking for a teleport.
+
 Two limits are deliberate and are what keep per-tick work bounded:
 
 * Prediction assumes every *other* entity holds its pose. Tracing the full cross product
@@ -43,6 +57,7 @@ from battle_city_sim import (
     DIRECTION_ORDER,
     Direction,
     Faction,
+    GridPos,
     Projectile,
     Rect,
     Rules,
@@ -53,7 +68,13 @@ from battle_city_sim import (
     passes_projectile,
 )
 from battle_city_sim.geometry import cell_of, cells_overlapping, clamp
-from battle_city_sim.tiles import MIRROR_REFLECTIONS
+from battle_city_sim.gimmicks import (
+    centre_cell,
+    conveyor_target,
+    teleport_pads,
+    teleport_target,
+)
+from battle_city_sim.tiles import MIRROR_REFLECTIONS, Tile
 
 # ``clamp``, ``cell_of`` and ``cells_overlapping`` are not re-exported from the simulation
 # package root. They are imported from their defining modules rather than reimplemented
@@ -129,15 +150,30 @@ def predicted_pose(
     direction: Direction | None,
     rules: Rules = DEFAULT_RULES,
 ) -> Tank:
-    """Return the pose ``tank`` would hold after a ``MoveCommand`` in ``direction``.
+    """Return the pose ``tank`` would hold after the movement phase.
 
-    ``None`` means no command: the pose is unchanged. A ``MoveCommand`` always turns the
-    tank and only sometimes advances it, so the returned facing is ``direction`` even
-    when the step is refused. The fire phase runs after the move phase in the same tick,
-    which is why a bot must aim from this pose and not from the pre-move one.
+    ``None`` means no command. That is not the same as "no movement": a tank standing on
+    a conveyor is pushed whether or not it asked to go anywhere, so a bot that treated
+    ``None`` as "stay put" would aim from a pose it will not be holding.
+
+    A ``MoveCommand`` always turns the tank and only sometimes advances it, so the
+    returned facing is ``direction`` even when the step is refused. Neither a conveyor
+    push nor a teleport arrival changes the facing. The fire phase runs after the move
+    phase in the same tick, which is why a bot must aim from this pose and not from the
+    pre-move one.
+
+    The three displacements are applied in the engine's own order -- command, push,
+    arrival -- against the other entities as they stand now; see the module note on what
+    prediction assumes about them.
     """
-    if direction is None:
-        return tank
+    start_cell = centre_cell(tank.position, rules)
+    pose = tank if direction is None else _commanded_pose(state, tank, direction, rules)
+    pose = _pushed_pose(state, pose, start_cell, rules)
+    return _arrived_pose(state, pose, start_cell, rules)
+
+
+def _commanded_pose(state: SimulationState, tank: Tank, direction: Direction, rules: Rules) -> Tank:
+    """Mirror ``step._apply_command``: always turn, advance only when the step is free."""
     turned = replace(tank, facing=direction)
     dx, dy = direction.scaled(rules.tank_speed)
     width, height = state.world_size(rules)
@@ -145,12 +181,49 @@ def predicted_pose(
         clamp(turned.position.x + dx, 0, width - rules.tank_size),
         clamp(turned.position.y + dy, 0, height - rules.tank_size),
     )
-    if target == turned.position:
-        return turned
+    return _moved_if_free(state, turned, target, rules)
+
+
+def _pushed_pose(state: SimulationState, pose: Tank, start_cell: GridPos, rules: Rules) -> Tank:
+    """Mirror ``step._apply_conveyor``: one push from the cell the phase started on."""
+    target = conveyor_target(state.grid, pose.position, start_cell, state.world_size(rules), rules)
+    if target is None:
+        return pose
+    return _moved_if_free(state, pose, target, rules)
+
+
+def _arrived_pose(state: SimulationState, pose: Tank, start_cell: GridPos, rules: Rules) -> Tank:
+    """Mirror ``step._apply_teleport``: one jump when the phase ends on a pad it entered.
+
+    The pad-pair scan is behind an ``is Tile.TELEPORT_PAD`` test that no classic tile
+    passes, so a grid without pads never walks its 256 cells.
+    """
+    cell = centre_cell(pose.position, rules)
+    if cell == start_cell or not state.grid.contains(cell):
+        return pose
+    if state.grid.at(cell) is not Tile.TELEPORT_PAD:
+        return pose
+    pads = teleport_pads(state.grid)
+    if pads is None:
+        return pose
+    target = teleport_target(pose.position, cell, pads, rules)
+    if target is None:
+        return pose
+    return _moved_if_free(state, pose, target, rules)
+
+
+def _moved_if_free(state: SimulationState, pose: Tank, target: Vec2, rules: Rules) -> Tank:
+    """Return ``pose`` at ``target``, or unchanged when the engine would refuse it.
+
+    "Moves nothing" counts as refused, matching the engine: that is what a displacement
+    clamped against the world edge comes out as.
+    """
+    if target == pose.position:
+        return pose
     body = Rect(target.x, target.y, rules.tank_size, rules.tank_size)
-    if body_is_blocked(state, turned.entity_id, body, rules):
-        return turned
-    return replace(turned, position=target)
+    if body_is_blocked(state, pose.entity_id, body, rules):
+        return pose
+    return replace(pose, position=target)
 
 
 def clearance_ticks(
@@ -162,15 +235,30 @@ def clearance_ticks(
 ) -> int:
     """Return how many of the next ``horizon`` ticks ``tank`` could advance in ``direction``.
 
-    Counting stops at the first refused step, so the result is "free run length", not
-    "free ticks somewhere ahead". ``horizon`` is the profile's planning horizon and is
-    what bounds the work: the probe is at most ``horizon`` collision tests.
+    Counting stops at the first tick that makes no progress *along* ``direction``, so the
+    result is "free run length", not "free ticks somewhere ahead". ``horizon`` is the
+    profile's planning horizon and is what bounds the work: the probe is at most
+    ``horizon`` collision tests.
+
+    Progress rather than "moved at all", because terrain can now move a tank that did not
+    get where it asked to go. A tank whose commanded step is refused by a wall while a
+    belt shoves it the other way has *moved*, and counting that as clearance would let the
+    bot commit a whole plan to a direction it is being carried away from. A belt pushing
+    the way the bot is driving counts double, which is also true.
+
+    On a grid with no gimmick terrain the two readings are the same measurement: the
+    commanded step is the only displacement there is, and it either advances along
+    ``direction`` or leaves the tank exactly where it was.
     """
+    step_x, step_y = direction.delta
     pose = tank
     free = 0
     for _ in range(horizon):
         advanced = predicted_pose(state, pose, direction, rules)
-        if advanced.position == pose.position:
+        progress = (advanced.position.x - pose.position.x) * step_x + (
+            advanced.position.y - pose.position.y
+        ) * step_y
+        if progress <= 0:
             return free
         pose = advanced
         free += 1

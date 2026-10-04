@@ -103,8 +103,13 @@ def test_an_unknown_field_is_rejected(tmp_path: Path, mutate: Any, field: str) -
     assert error.message == "is not a known field"
 
 
-@pytest.mark.parametrize("version", [0, 2, 99, "1", 1.0, True, None])
+@pytest.mark.parametrize("version", [0, 3, 99, "1", 1.0, True, None])
 def test_an_unsupported_schema_version_is_rejected(tmp_path: Path, version: Any) -> None:
+    """An unknown version is checked against the classic schema, whose const names it.
+
+    Guessing a supported version instead would validate a document against rules it
+    never claimed to follow.
+    """
     error = reject(
         tmp_path, mutated_level(lambda document: document.update(schema_version=version))
     )
@@ -174,7 +179,7 @@ def test_a_wrong_row_width_is_rejected(tmp_path: Path, row: str) -> None:
     assert error.message == f"must have 16 tile codes, found {len(row)}"
 
 
-@pytest.mark.parametrize("code", ["9", "a", "-", " ", "٣", "０", "²", "8"])
+@pytest.mark.parametrize("code", ["E", "a", "-", " ", "٣", "０", "²", "8"])
 def test_an_unknown_tile_code_names_its_column(tmp_path: Path, code: str) -> None:
     row = "000" + code + "0" * 12
     error = reject(
@@ -186,6 +191,20 @@ def test_an_unknown_tile_code_names_its_column(tmp_path: Path, code: str) -> Non
         return
     assert error.field == "grid.rows[4][3]"
     assert error.message == f"is not a known tile code: {code!r}"
+
+
+@pytest.mark.parametrize("code", ["9", "A", "B", "C", "D"])
+def test_a_gimmick_code_in_a_classic_level_names_the_version_it_needs(
+    tmp_path: Path, code: str
+) -> None:
+    """ "Not a tile code" would be wrong and unhelpful: it is a code from a later version."""
+    row = "000" + code + "0" * 12
+    error = reject(
+        tmp_path, mutated_level(lambda document: document["grid"]["rows"].__setitem__(4, row))
+    )
+    assert error.field == "grid.rows[4][3]"
+    assert "level schema version 2" in error.message
+    assert "declares an earlier version" in error.message
 
 
 def test_a_non_string_row_is_rejected(tmp_path: Path) -> None:

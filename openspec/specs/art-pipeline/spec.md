@@ -16,6 +16,8 @@ Final game art comes from versioned Blender scenes rendered with a consistent or
 
 Use a cohesive stylized 2D/2.5D look: readable silhouettes, strong terrain contrast, clear team/faction colors, and deliberate effects that stay legible at gameplay scale. Rendering may imply depth, but gameplay geometry remains grid- and simulation-owned.
 
+The v2 conveyor/pad presentation uses five deterministic, grayscale-distinct static glyphs in the existing procedural client renderer. That renderer does not consume the Blender atlas, so this change does not add unused Blender/atlas assets; future atlas integration must follow the source and export rules above. Glyphs do not change simulation hitboxes.
+
 ## Requirements
 
 - Camera, lighting, render resolution, color management, and Blender version are recorded.
