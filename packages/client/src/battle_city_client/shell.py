@@ -63,6 +63,11 @@ from typing import Final
 from battle_city_protocol import ClientMessage, MatchMode, ServerMessage
 from battle_city_sim import DEFAULT_RULES, Rules, RunOutcome
 
+from .accessibility import (
+    DEFAULT_ACCESSIBILITY,
+    AccessibilityPreferences,
+    GamepadControl,
+)
 from .campaign import (
     DEFAULT_CAMPAIGN_RULES,
     CampaignPhase,
@@ -74,6 +79,15 @@ from .campaign import (
 )
 from .intents import IDLE_INTENT, Action, PlayerIntent
 from .online import OnlineConfig, OnlinePhase, OnlineSession
+from .options import (
+    CAPTURE_PROMPT,
+    RESET_NOTICE,
+    OptionId,
+    OptionsState,
+    adjust,
+    capture_control,
+    capture_key,
+)
 from .persistence import LocalProfile, StageCheckpoint
 from .session import DEFAULT_SEED, StageSession
 from .stage_adapter import StageEntry, stage_identity
@@ -85,6 +99,11 @@ class Screen(Enum):
     MAIN_MENU = "main_menu"
     STAGE_SELECT = "stage_select"
     CONTROLS = "controls"
+    """The reference card, and the badge chooser. Up and down cycle badges here."""
+
+    OPTIONS = "options"
+    """Accessibility preferences and remapping. See :mod:`battle_city_client.options`."""
+
     PLAYING = "playing"
     PAUSED = "paused"
     RUN_OVER = "run_over"
@@ -107,8 +126,9 @@ class MainMenuItem(Enum):
 
     PLAY = 0
     CONTROLS = 1
-    ONLINE = 2
-    QUIT = 3
+    OPTIONS = 2
+    ONLINE = 3
+    QUIT = 4
 
 
 class PauseItem(Enum):
@@ -129,6 +149,7 @@ class RunOverItem(Enum):
 MAIN_MENU_LABELS: Final[dict[MainMenuItem, str]] = {
     MainMenuItem.PLAY: "PLAY",
     MainMenuItem.CONTROLS: "CONTROLS",
+    MainMenuItem.OPTIONS: "OPTIONS",
     MainMenuItem.ONLINE: "ONLINE",
     MainMenuItem.QUIT: "QUIT",
 }
@@ -269,6 +290,21 @@ class ClientShell:
     from it.
     """
 
+    accessibility: AccessibilityPreferences = DEFAULT_ACCESSIBILITY
+    """Session-only accessibility preferences, replaced wholesale when one changes.
+
+    Default-constructed, which means no remapping and no shipped key tables: a shell
+    built without them resolves every binding from :mod:`battle_city_client.keymap`'s own
+    defaults, exactly as it did before this field existed.
+    :func:`battle_city_client.app.build_app` seeds it with the real tables so the options
+    screen can say what a control is bound to and refuse a key that is already taken.
+
+    Nothing here is written to disk; see :mod:`battle_city_client.accessibility`.
+    """
+
+    options: OptionsState = field(default_factory=OptionsState)
+    """Where the cursor is on the options screen, and whether a row is capturing."""
+
     online: OnlineSession | None = field(default=None, init=False)
     outbox: list[ClientMessage] = field(default_factory=list, init=False, repr=False)
     notice: str = field(default="", init=False)
@@ -289,6 +325,16 @@ class ClientShell:
     def run_over_item(self) -> RunOverItem:
         """The highlighted terminal screen entry."""
         return RunOverItem(self.run_over_index)
+
+    @property
+    def capturing(self) -> bool:
+        """Whether the options screen is waiting for one raw input to bind.
+
+        The loop reads this *before* it translates a key, so the keystroke that is about
+        to become the fire control does not also fire, confirm or leave the screen on its
+        way in.
+        """
+        return self.screen is Screen.OPTIONS and self.options.capturing
 
     @property
     def selected_entry(self) -> StageEntry | None:
@@ -622,6 +668,16 @@ class ClientShell:
         if batch is not None:
             self.outbox.append(batch)
 
+    def advance_presentation(self, elapsed_ms: int) -> None:
+        """Give the online session a frame of wall time to draw with.
+
+        Separate from :meth:`advance`, which runs simulation ticks and is never called
+        online. This advances nothing: it moves the render clock the online session
+        interpolates on, and a local run has none.
+        """
+        if self.online is not None:
+            self.online.advance_presentation(elapsed_ms)
+
     def link_lost(self, detail: str = "") -> None:
         """Record that the transport ended. The session is over for this client."""
         if self.online is not None:
@@ -705,6 +761,8 @@ class ClientShell:
                 self._handle_stage_select(action)
             case Screen.CONTROLS:
                 self._handle_controls(action)
+            case Screen.OPTIONS:
+                self._handle_options(action)
             case Screen.PLAYING:
                 self._handle_playing(action)
             case Screen.PAUSED:
@@ -736,6 +794,8 @@ class ClientShell:
                 self.screen = Screen.STAGE_SELECT
             case MainMenuItem.CONTROLS:
                 self.screen = Screen.CONTROLS
+            case MainMenuItem.OPTIONS:
+                self.open_options()
             case MainMenuItem.ONLINE:
                 self.open_online()
             case MainMenuItem.QUIT:
@@ -773,6 +833,117 @@ class ClientShell:
                 self._return_to_main_menu()
             case _:
                 return
+
+    def open_options(self) -> None:
+        """Show the options screen with a fresh cursor and nothing armed."""
+        self.options = OptionsState()
+        self.notice = ""
+        self.screen = Screen.OPTIONS
+
+    def _handle_options(self, action: Action) -> None:
+        """The options screen: move, adjust, arm a binding, reset, or leave.
+
+        A row that is armed for capture does not reach here at all -- the loop hands raw
+        input to :meth:`capture_key` and :meth:`capture_control` instead -- except for
+        the two ways out, which the loop lets through so they keep working from inside a
+        capture. Cancel abandons the row; reset puts every preference and binding back.
+        Both are refused *as bindings* for exactly this reason, and both are honoured
+        here rather than only in the loop, so a caller driving the shell directly gets
+        the same guarantee the window does.
+        """
+        state = self.options
+        if state.capturing:
+            if action is Action.UI_CANCEL:
+                state.cancel()
+            elif action is Action.OPTION_RESET:
+                self._reset_options()
+            return
+        match action:
+            case Action.UI_UP:
+                state.move(-1, self.accessibility)
+            case Action.UI_DOWN:
+                state.move(1, self.accessibility)
+            case Action.UI_LEFT:
+                self._adjust_option(-1)
+            case Action.UI_RIGHT:
+                self._adjust_option(1)
+            case Action.UI_CONFIRM:
+                self._confirm_option()
+            case Action.OPTION_RESET:
+                self._reset_options()
+            case Action.UI_CANCEL:
+                self._return_to_main_menu()
+            case _:
+                return
+
+    def _adjust_option(self, delta: int) -> None:
+        """Move the highlighted setting. A binding row is unmoved by left and right."""
+        row = self.options.row(self.accessibility)
+        self.accessibility = adjust(self.accessibility, row, delta)
+        self.options.notice = ""
+
+    def _confirm_option(self) -> None:
+        row = self.options.row(self.accessibility)
+        match row.id:
+            case OptionId.BINDING if row.action is not None:
+                self.options.arm(row.action)
+            case OptionId.RESET:
+                self._reset_options()
+            case _:
+                # Confirm is a second way to work a switch, for a player whose pad has a
+                # usable button and an unusable stick.
+                self.accessibility = adjust(self.accessibility, row, 1)
+
+    def _reset_options(self) -> None:
+        """Put every preference and every binding back to the shipped ones.
+
+        The recovery path for a remapping that went wrong. It is reachable with
+        ``UI_CONFIRM`` on its own row and with a key of its own, and neither of those can
+        be rebound away from it, so it works from whatever state the controls are in.
+        """
+        self.accessibility = self.accessibility.reset()
+        self.options.cancel()
+        self.options.notice = RESET_NOTICE
+
+    # -- binding capture -------------------------------------------------------
+
+    def capture_key(self, key: int) -> bool:
+        """Offer one keycode to the armed row. Returns whether it was taken.
+
+        A refusal -- a reserved key, or one that already drives something else -- leaves
+        the row armed and puts the reason on screen, so the player tries another key
+        rather than wondering which of the two things happened.
+        """
+        action = self.options.capture
+        if self.screen is not Screen.OPTIONS or action is None:
+            return False
+        result = capture_key(self.accessibility, action, key)
+        self.accessibility = result.preferences
+        self.options.notice = result.notice
+        if result.accepted:
+            self.options.capture = None
+        return result.accepted
+
+    def capture_control(self, control: GamepadControl) -> bool:
+        """Offer one pad control to the armed row. Returns whether it was taken."""
+        action = self.options.capture
+        if self.screen is not Screen.OPTIONS or action is None:
+            return False
+        result = capture_control(self.accessibility, action, control)
+        self.accessibility = result.preferences
+        self.options.notice = result.notice
+        if result.accepted:
+            self.options.capture = None
+        return result.accepted
+
+    def cancel_capture(self) -> None:
+        """Abandon an armed row, leaving its binding exactly as it was."""
+        self.options.cancel()
+
+    @property
+    def capture_prompt(self) -> str:
+        """What the screen says while a row is armed."""
+        return CAPTURE_PROMPT if self.options.capturing else ""
 
     def _handle_playing(self, action: Action) -> None:
         if action in (Action.TOGGLE_PAUSE, Action.UI_CANCEL):
@@ -917,6 +1088,7 @@ class ClientShell:
         self.open_session(self.session.restarted())
 
     def _return_to_main_menu(self) -> None:
+        self.options.cancel()
         self.session = None
         self._drop_online()
         self.campaign = None

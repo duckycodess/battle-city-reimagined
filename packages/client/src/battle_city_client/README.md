@@ -39,6 +39,9 @@ pygame and drives the real loop, the real renderer and the real simulation.
 | Window scale | `-` and `+`     |
 | Resume the saved stage | `R`, on the stage list |
 | Choose a badge | Up and down, on the controls screen |
+| Change a setting | Left and right, on the options screen |
+| Rebind a control | `Enter` on its row, then the key or pad control |
+| Reset every option and binding | `F5`, on the options screen |
 | Lobby ready  | `R`             |
 | Lobby mode (host)  | `M`       |
 | Lobby stage (host) | `L`       |
@@ -46,9 +49,42 @@ pygame and drives the real loop, the real renderer and the real simulation.
 | Leave a lobby or an online run | `ESC` |
 | Quit         | Close the window, or `QUIT` on the main menu |
 
-Keyboard only in this build. Gamepad support and remapping are accessibility
-requirements; they arrive as further tables feeding the same `Action` vocabulary in
-`keymap.py`, and nothing downstream of that module knows what a device is.
+A gamepad drives the same actions: the left stick or the hat moves, button 0 fires and
+confirms, button 1 goes back, button 7 pauses. Pads are opened behind a guard, followed
+while the game runs, and a pad that is unplugged — or a window that loses focus — has
+exactly its own held input neutralised, never the keyboard's.
+
+## Accessibility
+
+The `OPTIONS` screen is its own screen and its own main-menu entry, below `CONTROLS`.
+It holds contrast, reduced motion, the pad dead zone, menu-cursor repeat timing,
+independent effect and music levels each with its own mute, and a rebindable control for
+every movement, fire, cursor and pause action — keyboard and pad, one row each.
+
+Three things are true of it and are said on the screen itself:
+
+- **The preferences last for this launch and are not saved.** The settings document
+  holds the window scale, the frame cap and the roster name; a fourth field is a schema
+  bump with a migration, which belongs to the issue that owns the save format. The
+  window scale is the exception, because it was already saved — and it is the interface's
+  enlargement control, which works on every screen and keeps every pixel square because
+  the scale is a whole number. Nothing here changes the logical frame or the HUD layout.
+- **The sound controls are inactive.** This build initialises no mixer and ships no
+  sound. The model is real and independent, so the setting is there to be set when audio
+  lands, and the row says what it is.
+- **Reduced motion has nothing yet to hold still.** Every frame is a function of the
+  state it is drawn from: no animation, no flash, no shake, no transition. The
+  preference reaches the renderer so the first effect to arrive has one place to ask.
+
+Going back (`ESC`, pad button 1) and quitting (the window's close button) cannot be
+rebound, and `F5` resets everything — all three work from inside a capture, so the
+remapping screen cannot lock a player out of the game.
+
+None of it reaches the simulation. A binding decides which `Action` an input names;
+repeat can only produce a cursor action, by construction; the dead zone decides whether
+a stick reading counts as held before anything is held; and a tick still carries exactly
+a facing and a fire flag. Contrast is a palette the asset cache is rebuilt from, so it
+changes pixels and nothing else.
 
 ## What it does and does not simulate
 
@@ -108,10 +144,29 @@ message only when it *is* the host, and the server refuses it regardless if it i
 
 **An online client runs no simulation.** There is no `step` call anywhere on the online
 path. `online.py` holds the session, `remote.py` reads the authoritative snapshot into
-something the renderer can draw, and `netlink.py` moves frames on a background thread so
-the frame loop never waits on a socket. What is drawn is the last snapshot the server
-sent; the run ends when the server says it ended, and a lost link ends the session
-without inventing an outcome to fill the gap.
+something the renderer can draw, `interpolation.py` decides which moment of the snapshot
+stream a frame shows, and `netlink.py` moves frames on a background thread so the frame
+loop never waits on a socket. The run ends when the server says it ended, and a lost
+link ends the session without inventing an outcome to fill the gap.
+
+**What is drawn is the snapshots the server sent, played back two ticks behind.**
+Phase 8 measured an online match at 0, 50, 100 and 200 ms and found that constant
+latency costs response time and nothing else, while a display faster than the tick rate
+duplicates half its frames and a jittery link skips whole ticks of motion. So the
+playfield is drawn from `OnlineSession.render_board`, which places moving entities on the
+straight line between the two authoritative positions that bracket a render clock running
+`SMOOTHING_TICKS` behind the newest snapshot. It never passes the newest snapshot, never
+invents an entity and never removes one the server still lists, and it costs 33 ms of
+response time. There is **no prediction**: the networking specification reserves
+prediction, rollback and reconciliation for measured need, protocol versioning and
+acceptance tests, and permits interpolation in the same paragraph.
+
+`OnlineSession.board` is untouched by any of that. The HUD, the state hash on screen and
+the input this client offers all read the newest snapshot directly, which is why
+`tests/networking/test_smoothing.py` can run every condition twice and show the server
+recorded the same run, from the same batches, hash for hash. The measurements, the
+conditions they were taken under and what was deliberately not done are in
+`tests/networking/README.md`.
 
 **Competitive modes are selectable and are not playable.** Free-for-all and team battle
 are real, versioned settings, carried with their team assignments in the match settings

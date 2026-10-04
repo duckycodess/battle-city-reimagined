@@ -25,6 +25,18 @@ phase. Input is offered once per authoritative tick, because a batch is for a ti
 second one for the same tick would only replace the first — and would spend the server's
 accepted rate for nothing.
 
+What is drawn, and what is authoritative
+----------------------------------------
+:attr:`OnlineSession.board` is the newest snapshot the server sent. It is what the HUD
+reads, what the state hash on screen comes from, and what input is offered against.
+:attr:`OnlineSession.render_board` is the same board with moving entities drawn a couple
+of ticks behind, so that a display running faster than the tick rate, or a link whose
+arrivals wobble, does not show the same frame twice. That is presentation and only
+presentation -- see :mod:`battle_city_client.interpolation`, and the measurements in
+``tests/networking/README.md`` that decided it was worth doing. It is still true that
+this client runs no simulation: interpolation never passes the newest snapshot and never
+invents an entity.
+
 Competitive modes
 -----------------
 The lobby view carries which modes the server offers and which it will actually start.
@@ -72,6 +84,7 @@ from battle_city_protocol import (
 from battle_city_sim import Direction
 
 from .intents import PlayerIntent
+from .interpolation import SMOOTHING_TICKS, SnapshotInterpolator
 from .remote import RemoteBoard, RemoteStateError, board_from_snapshot, terrain_from_rows
 
 WIRE_DIRECTIONS: Final[dict[Direction, DirectionCode]] = {
@@ -165,10 +178,25 @@ class OnlineSession:
     board: RemoteBoard | None = None
     notice: str = ""
     closed_reason: RejectionCode | None = None
+    smoothing_ticks: int = field(default=SMOOTHING_TICKS, kw_only=True)
+    """Ticks of playback delay the renderer draws with. Zero draws the newest snapshot.
+
+    Read once, when the session is built, because playback delay is a property of the
+    client rather than of a match: changing it mid-run would move the picture under the
+    player. A measurement that wants the Phase 7 behaviour builds a session with zero.
+
+    Keyword-only, so that adding it did not renumber the positional arguments of a
+    session that existed before it. A caller that built one positionally still builds the
+    same session, and nothing has to know this field was inserted in the middle.
+    """
     _token: str | None = field(default=None, repr=False)
     _sequence: int = 0
     _last_input_tick: int | None = None
     _terrain_tick: int | None = None
+    _view: SnapshotInterpolator = field(default_factory=SnapshotInterpolator, repr=False)
+
+    def __post_init__(self) -> None:
+        self._view.smoothing_ticks = self.smoothing_ticks
 
     # -- queries ---------------------------------------------------------------
 
@@ -180,6 +208,17 @@ class OnlineSession:
     def live(self) -> bool:
         """Whether the session is still going anywhere."""
         return self.phase is not OnlinePhase.ENDED
+
+    @property
+    def render_board(self) -> RemoteBoard | None:
+        """The board the renderer draws the playfield from. Never the HUD's board.
+
+        It is an authoritative board with moving entities placed between two the server
+        sent. Everything a player reads as a number -- the tick, the lives, the hash --
+        comes from :attr:`board`, which this never touches.
+        """
+        drawn = self._view.view()
+        return self.board if drawn is None else drawn
 
     @property
     def outcome(self) -> int | None:
@@ -337,11 +376,13 @@ class OnlineSession:
                 self._token = message.token
                 self.session = message.session
                 self.settings = message.settings
+                self._view.tick_rate = message.session.tick_rate
                 self.phase = OnlinePhase.STARTING
                 self.notice = ""
             case JoinAccepted():
                 self.slot = message.slot
                 self.session = message.session
+                self._view.tick_rate = message.session.tick_rate
                 self.phase = OnlinePhase.PLAYING
             case StateSnapshot():
                 self._apply_snapshot(message)
@@ -353,6 +394,15 @@ class OnlineSession:
                 self.phase = OnlinePhase.ENDED
                 self.closed_reason = message.code
                 self.notice = _refusal_notice(message.code, message.detail)
+
+    def advance_presentation(self, elapsed_ms: int) -> None:
+        """Move the render clock on by one frame of wall time.
+
+        This is the only clock in the online path and it drives nothing but drawing. No
+        tick is advanced here, no input is offered, and a client that never called it
+        would show the newest snapshot every frame exactly as it did before.
+        """
+        self._view.advance(elapsed_ms)
 
     def link_lost(self, detail: str = "") -> None:
         """Record that the transport ended without the server saying why.
@@ -381,6 +431,7 @@ class OnlineSession:
                 # that lasts exactly until the keyframe that accompanies a join.
                 return
             self.board = board_from_snapshot(snapshot, terrain)
+            self._view.record(self.board)
         except RemoteStateError as error:
             self.notice = f"SERVER STATE UNREADABLE: {error}"
 
@@ -392,6 +443,9 @@ class OnlineSession:
             if event.kind is EventKind.TILE_DAMAGED:
                 board = board.damaged(event)
         self.board = board
+        # The events for a tick arrive after its snapshot, so the board the buffer is
+        # holding for that tick is the one without them. Recording it again replaces it.
+        self._view.record(board)
 
 
 def _refusal_notice(code: RejectionCode, detail: str) -> str:
