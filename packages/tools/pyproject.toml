@@ -8,6 +8,10 @@ dependencies = [
   "battle-city-protocol",
 ]
 
+[project.scripts]
+battle-city-tools = "battle_city_tools.cli:main"
+battle-city-assets = "battle_city_tools.assets.cli:main"
+
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"

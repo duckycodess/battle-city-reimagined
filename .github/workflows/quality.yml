@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # The baseline the manifests declare is ">=3.14"; this is the one version the
+  # project actually verifies. docs/release/audit.md records that distinction
+  # rather than letting a green run imply coverage it does not have.
+  PYTHON_VERSION: "3.14"
+
 jobs:
   quality:
     runs-on: ubuntu-latest
@@ -19,6 +25,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Install workspace
         run: uv sync --locked --all-packages --all-groups
       - name: Check formatting
@@ -29,3 +36,382 @@ jobs:
         run: uv run --locked mypy packages tests
       - name: Test
         run: uv run --locked pytest
+
+  release:
+    # What a published release would have to survive, run on every change rather
+    # than once at the end: the distributions are built, read without being
+    # trusted, installed into an environment that shares nothing with the
+    # workspace, and then made to do real work from outside the checkout.
+    # Nothing here publishes, tags or uploads anything.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check the lockfile is current
+        run: uv lock --check
+
+      - name: Build every distribution
+        # uv builds each wheel from the sdist it just built, so a file missing
+        # from an sdist is missing from the wheel that follows it.
+        run: uv build --all-packages
+
+      - name: Inspect the built distributions
+        run: |
+          uv run --no-project --python "$PYTHON_VERSION" python - <<'PY'
+          """Check the built distributions against what the release documents promise.
+
+          Standard library only, and it reads the archives rather than installing them:
+          a wheel missing a data file must fail here, before anything imports it and
+          falls back to a source tree that still has the file.
+          """
+
+          from __future__ import annotations
+
+          import sys
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          VERSION = "0.1.0"
+          DIST = Path("dist")
+
+          # Every distribution, with the files that must travel with it and the console
+          # scripts it is allowed to install. A wheel is not merely a directory listing:
+          # the entries here are the ones a clean install would silently do without.
+          PACKAGES = {
+              "battle_city_sim": {"files": ["py.typed"], "scripts": {}},
+              "battle_city_content": {
+                  "files": [
+                      "py.typed",
+                      "schemas/classic-level.schema.json",
+                      "schemas/classic-level.v2.schema.json",
+                      "schemas/pack.schema.json",
+                      "levels/classic-01.json",
+                      "levels/classic-02.json",
+                      "levels/classic-03.json",
+                      "levels/gimmick-demo-01.json",
+                      "packs/classic.json",
+                      "packs/gimmick-demo.json",
+                  ],
+                  "scripts": {},
+              },
+              "battle_city_protocol": {"files": ["py.typed"], "scripts": {}},
+              "battle_city_ai": {"files": [], "scripts": {}},
+              # An importable library. It owns no command, and the check below is what
+              # stops one appearing without the release documents being updated.
+              "battle_city_server": {"files": ["py.typed"], "scripts": {}},
+              "battle_city_client": {
+                  "files": [],
+                  "scripts": {
+                      "battle-city-client": "battle_city_client.app:main",
+                      "battle-city-editor": "battle_city_client.editor.app:main",
+                  },
+              },
+              "battle_city_tools": {
+                  "files": [],
+                  "scripts": {
+                      "battle-city-tools": "battle_city_tools.cli:main",
+                      "battle-city-assets": "battle_city_tools.assets.cli:main",
+                  },
+              },
+          }
+
+          failures: list[str] = []
+
+
+          def check(condition: bool, message: str) -> None:
+              if not condition:
+                  failures.append(message)
+
+
+          def console_scripts(text: str) -> dict[str, str]:
+              """Parse the ``[console_scripts]`` section of an ``entry_points.txt``."""
+              found: dict[str, str] = {}
+              section = ""
+              for raw in text.splitlines():
+                  line = raw.strip()
+                  if line.startswith("["):
+                      section = line
+                  elif line and "=" in line and section == "[console_scripts]":
+                      name, _, target = line.partition("=")
+                      found[name.strip()] = target.strip()
+              return found
+
+
+          for package, expected in sorted(PACKAGES.items()):
+              wheel = DIST / f"{package}-{VERSION}-py3-none-any.whl"
+              sdist = DIST / f"{package}-{VERSION}.tar.gz"
+              check(wheel.is_file(), f"{wheel}: not built")
+              check(sdist.is_file(), f"{sdist}: not built")
+              if not (wheel.is_file() and sdist.is_file()):
+                  continue
+
+              info = f"{package}-{VERSION}.dist-info"
+              with zipfile.ZipFile(wheel) as archive:
+                  names = set(archive.namelist())
+                  metadata = archive.read(f"{info}/METADATA").decode()
+                  entry_points = (
+                      archive.read(f"{info}/entry_points.txt").decode()
+                      if f"{info}/entry_points.txt" in names
+                      else ""
+                  )
+              with tarfile.open(sdist) as archive:
+                  sources = set(archive.getnames())
+
+              check(f"{package}/__init__.py" in names, f"{wheel.name}: no {package}/__init__.py")
+              check(
+                  f"{package}-{VERSION}/src/{package}/__init__.py" in sources,
+                  f"{sdist.name}: no src/{package}/__init__.py",
+              )
+
+              # Data files and the typing marker, in the wheel *and* in the sdist. These
+              # are the files a build filter drops without failing anything: the content
+              # package shipped no py.typed for exactly this reason until #15.
+              for relative in expected["files"]:
+                  check(f"{package}/{relative}" in names, f"{wheel.name}: no {relative}")
+                  check(
+                      f"{package}-{VERSION}/src/{package}/{relative}" in sources,
+                      f"{sdist.name}: no src/{package}/{relative}",
+                  )
+
+              # Exactly the declared commands. An unexpected script is as much a
+              # packaging mistake as a missing one, and it would make the install
+              # instructions wrong.
+              found = console_scripts(entry_points)
+              check(
+                  found == expected["scripts"],
+                  f"{wheel.name}: console scripts {found} != {expected['scripts']}",
+              )
+
+              check(
+                  "Requires-Python: >=3.14" in metadata,
+                  f"{wheel.name}: Requires-Python is not >=3.14",
+              )
+
+              # Nothing from outside the package tree. Tests, the Blender sources and
+              # the source-tree sprite pack belong to no distribution.
+              strays = sorted(n for n in names if not n.startswith((f"{package}/", f"{info}/")))
+              check(not strays, f"{wheel.name}: unexpected members {strays}")
+
+          # The seven distributions are the whole release. A workspace member added
+          # later would otherwise ship without ever being looked at here.
+          built = sorted(path.name for path in DIST.glob("*.whl"))
+          check(
+              built == sorted(f"{name}-{VERSION}-py3-none-any.whl" for name in PACKAGES),
+              f"dist/: built wheels {built} are not the seven expected distributions",
+          )
+
+          for failure in failures:
+              print(f"distribution check failed: {failure}", file=sys.stderr)
+          print(f"inspected {len(PACKAGES)} distributions, {len(failures)} failures")
+          sys.exit(1 if failures else 0)
+          PY
+
+      - name: Install the release into a clean environment
+        run: |
+          set -euo pipefail
+          uv venv --python "$PYTHON_VERSION" "$RUNNER_TEMP/release-env"
+          VENV_PY="$RUNNER_TEMP/release-env/bin/python"
+
+          # The one third-party runtime dependency, pinned to the version and the
+          # artifact digests uv.lock already records. Reading them out of the lockfile
+          # rather than copying them in here keeps uv.lock the only place a version or
+          # a digest is written down, so the two cannot drift apart.
+          "$VENV_PY" - > "$RUNNER_TEMP/pygame-ce.txt" <<'PY'
+          from __future__ import annotations
+
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          NAME = "pygame-ce"
+          lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+          locked = [entry for entry in lock["package"] if entry["name"] == NAME]
+          if len(locked) != 1:
+              sys.exit(f"uv.lock holds {len(locked)} entries for {NAME}, expected exactly one")
+
+          package = locked[0]
+          digests = sorted(
+              {artifact["hash"] for artifact in package.get("wheels", [])}
+              | ({package["sdist"]["hash"]} if "sdist" in package else set())
+          )
+          if not digests:
+              sys.exit(f"uv.lock records no artifact digests for {NAME}")
+
+          lines = [f"{NAME}=={package['version']} \\"]
+          lines += [f"    --hash={digest} \\" for digest in digests[:-1]]
+          lines += [f"    --hash={digests[-1]}"]
+          print("\n".join(lines))
+          PY
+          cat "$RUNNER_TEMP/pygame-ce.txt"
+
+          # Explicit paths and --no-index, so no battle-city-* name is ever resolved
+          # against an index. No such project is published, and a package index that
+          # answered to one of these names would be answering for someone else.
+          uv pip install --python "$VENV_PY" --no-index --no-deps \
+            dist/battle_city_sim-0.1.0-py3-none-any.whl \
+            dist/battle_city_content-0.1.0-py3-none-any.whl \
+            dist/battle_city_protocol-0.1.0-py3-none-any.whl \
+            dist/battle_city_ai-0.1.0-py3-none-any.whl \
+            dist/battle_city_server-0.1.0-py3-none-any.whl \
+            dist/battle_city_client-0.1.0-py3-none-any.whl \
+            dist/battle_city_tools-0.1.0-py3-none-any.whl
+          uv pip install --python "$VENV_PY" --no-deps --require-hashes \
+            --requirements "$RUNNER_TEMP/pygame-ce.txt"
+          uv pip list --python "$VENV_PY"
+
+      - name: Run the installed release
+        run: |
+          set -euo pipefail
+          BIN="$RUNNER_TEMP/release-env/bin"
+          export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
+          # Outside the checkout on purpose: an import that quietly resolved to
+          # packages/*/src would pass anywhere else.
+          cd "$RUNNER_TEMP"
+
+          "$BIN/python" - <<'PY'
+          """Prove the installed wheels do real work with no repository behind them."""
+
+          from __future__ import annotations
+
+          import importlib.metadata as metadata
+          import sys
+          import sysconfig
+          from pathlib import Path
+
+          import battle_city_ai
+          import battle_city_client
+          import battle_city_content as content
+          import battle_city_protocol
+          import battle_city_server
+          import battle_city_sim as sim
+          import battle_city_tools
+          from battle_city_server import content as server_content
+
+          SITE = Path(sysconfig.get_paths()["purelib"]).resolve()
+          EXPECTED_DISTRIBUTIONS = {
+              "battle-city-ai",
+              "battle-city-client",
+              "battle-city-content",
+              "battle-city-protocol",
+              "battle-city-server",
+              "battle-city-sim",
+              "battle-city-tools",
+              "pygame-ce",
+          }
+          EXPECTED_SCRIPTS = {
+              "battle-city-client": "battle_city_client.app:main",
+              "battle-city-editor": "battle_city_client.editor.app:main",
+              "battle-city-tools": "battle_city_tools.cli:main",
+              "battle-city-assets": "battle_city_tools.assets.cli:main",
+          }
+
+          failures: list[str] = []
+
+
+          def check(condition: bool, message: str) -> None:
+              if not condition:
+                  failures.append(message)
+
+
+          # Every import came out of the installed wheels rather than a source checkout.
+          for module in (
+              battle_city_ai,
+              battle_city_client,
+              content,
+              battle_city_protocol,
+              battle_city_server,
+              sim,
+              battle_city_tools,
+          ):
+              origin = Path(module.__file__ or "").resolve()
+              check(origin.is_relative_to(SITE), f"{module.__name__} imported from {origin}")
+
+          # The environment holds the release and nothing else. Anything extra means
+          # something was resolved from an index instead of from the built wheels.
+          installed = {
+              dist.metadata["Name"].lower()
+              for dist in metadata.distributions()
+              if dist.metadata["Name"]
+          }
+          check(
+              installed == EXPECTED_DISTRIBUTIONS,
+              f"installed distributions {sorted(installed)} != {sorted(EXPECTED_DISTRIBUTIONS)}",
+          )
+
+          # The content wheel carries its own data: schemas, levels and pack manifests
+          # all travelled, and the loader finds them under site-packages.
+          root = content.bundled_content_root()
+          check(root.resolve().is_relative_to(SITE), f"bundled content root {root} is outside {SITE}")
+          pack = content.load_bundled_pack()
+          check(len(pack.levels) == 3, f"bundled pack declares {len(pack.levels)} levels, expected 3")
+          check(bool(content.load_gimmick_demo_pack().levels), "gimmick demo pack has no levels")
+
+          for reference in pack.levels:
+              level = content.load_level(root / "levels" / f"{reference.level_id}.json")
+              check(
+                  (level.grid.width, level.grid.height) == (16, 16),
+                  f"{reference.level_id}: grid is {level.grid.width}x{level.grid.height}",
+              )
+              # Client and server each map content onto a stage; both must still agree.
+              client_stage = battle_city_client.stage_from_level(level)
+              server_stage = server_content.stage_from_level(level)
+              check(
+                  client_stage == server_stage,
+                  f"{reference.level_id}: client and server built different stages",
+              )
+              check(
+                  bool(server_content.content_ref_for(pack, level).level_id),
+                  f"{reference.level_id}: server built no content reference",
+              )
+
+              # The simulation runs, and runs the same way twice, from the wheel alone.
+              inputs = tuple(sim.TickInput(tick=n, commands=()) for n in range(30))
+              first, _ = sim.run_ticks(sim.new_game(client_stage, seed=20260104), inputs)
+              second, _ = sim.run_ticks(sim.new_game(client_stage, seed=20260104), inputs)
+              check(
+                  sim.state_hash(first) == sim.state_hash(second),
+                  f"{reference.level_id}: 30 ticks were not reproducible",
+              )
+
+          check(bool(battle_city_ai.PROFILE_ORDER), "the AI package exposes no difficulty profiles")
+
+          # The server is an importable library. The four commands in the environment
+          # are the client's and the tools'; the server owns none.
+          check(bool(battle_city_server.__all__), "battle_city_server exports nothing")
+          scripts = {
+              entry.name: entry.value
+              for dist in metadata.distributions()
+              for entry in dist.entry_points
+              if entry.group == "console_scripts"
+          }
+          check(scripts == EXPECTED_SCRIPTS, f"console scripts in the environment: {scripts}")
+
+          for failure in failures:
+              print(f"clean-install check failed: {failure}", file=sys.stderr)
+          print(f"clean-install checks complete, {len(failures)} failures")
+          sys.exit(1 if failures else 0)
+          PY
+
+          # The installed commands, run as a user would run them.
+          "$BIN/battle-city-tools" validate --bundled
+          "$BIN/battle-city-tools" inspect --bundled > /dev/null
+          "$BIN/battle-city-assets" --help > /dev/null
+          "$BIN/battle-city-client" --help > /dev/null
+          "$BIN/battle-city-editor" --help > /dev/null
+
+      - name: Validate the source-tree sprite pack
+        # The starter atlas lives in assets/, outside every package, and no
+        # distribution carries it -- see docs/release/audit.md. It is still a tracked
+        # release artifact, so the released tool is pointed at it explicitly. The
+        # --pack argument is required rather than decorative: the default is resolved
+        # against the working directory.
+        run: |
+          "$RUNNER_TEMP/release-env/bin/battle-city-assets" validate \
+            --pack assets/sprites/starter

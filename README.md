@@ -28,6 +28,14 @@ Python 3.14 or newer. Install uv, then run uv sync --all-packages --all-groups. 
 
 Package boundaries, issue workflow, dependency ownership, and acceptance rules live in AGENTS.md and CONTRIBUTING.md. Blender-rendered spritesheets are the planned art source; generated concept images are references only.
 
+## Distributions
+
+`uv build --all-packages` produces a wheel and a source distribution for each of the seven workspace packages. Installing them gives four commands — `battle-city-client`, `battle-city-editor`, `battle-city-tools`, and `battle-city-assets` — plus the server as an importable library, and the schemas, classic stages, and pack manifests as package data. The starter sprite atlas stays in the source tree: no package owns it and the client renders procedurally.
+
+Nothing is published. No package index, no tag, no release; the only supported route is building from a checkout, and no index entry under any `battle-city-*` name belongs to this project. **The project has no license yet**, so nobody may rely on permission to redistribute it, and the bundled stage data asserts no license over layouts converted from the unlicensed historical repository.
+
+[docs/release](docs/release/) carries setup and upgrade instructions, the provenance, dependency, and license audit, and the release checks the CI release job runs on every pull request.
+
 ## Roadmap
 
 See [open implementation issues](https://github.com/duckycodess/battle-city-reimagined/issues). Work proceeds from deterministic simulation and level data toward client/server play, content tools, art, accessibility, and release.

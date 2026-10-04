@@ -26,3 +26,9 @@ Use a focused PR with a clear summary, linked issue, test results, screenshots f
 ## Local commands
 
 Install Python 3.14+ and uv. Run uv sync --all-packages --all-groups, then make ci. Shared dependency changes must be coordinated through the integration/bootstrap issue that owns uv.lock.
+
+## Packaging
+
+Changing what a distribution contains means changing package build metadata, and a workspace cannot notice a packaging mistake on its own: every package is installed as an editable checkout, so a file a wheel forgot is still on the import path. Run uv build --all-packages and the release job's checks before trusting such a change. docs/release/README.md describes them and the release job in .github/workflows/quality.yml is the authoritative copy.
+
+Adding a console script, a data file, or a package means updating the expectations written into that job; it asserts an exact set rather than a minimum, so an unannounced addition fails it. Keep the four installed commands and the two deliberate omissions — the server has no CLI, and no distribution carries the sprite atlas — consistent with docs/release/.
