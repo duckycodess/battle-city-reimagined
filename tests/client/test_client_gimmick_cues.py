@@ -10,6 +10,14 @@ The direction half matters as much as the distinctness half. An arrow that disag
 the push the simulation applies would be the worst kind of bug -- invisible to every test
 that only checks the art is *different* -- so the drawing table is compared against the
 simulation's own table, cell by cell.
+
+Every separation claim is measured in *every* palette this build ships, not only the
+default one. A contrast palette is a different set of colours threaded through the same
+drawing code, so a gimmick tile that forgot to take the palette would keep its default
+colours while the board around it changed -- a tile that reads correctly in the palette
+the test happened to pick and wrongly in the one a player chose. Parameterising over
+:data:`battle_city_client.theme.PALETTES` is what makes a palette added later have to
+answer for these tiles too.
 """
 
 from __future__ import annotations
@@ -66,6 +74,16 @@ def luminance_pattern(surface: pygame.Surface) -> tuple[int, ...]:
     )
 
 
+def pixels(surface: pygame.Surface) -> tuple[int, ...]:
+    """Every channel of every pixel -- the reading a luminance fingerprint throws away."""
+    return tuple(
+        channel
+        for y in range(surface.get_height())
+        for x in range(surface.get_width())
+        for channel in surface.get_at((x, y))
+    )
+
+
 def gimmick_stage() -> Stage:
     painted = dict(GIMMICK_CELLS)
     painted[GridPos(7, 15)] = Tile.HOME
@@ -81,25 +99,88 @@ def gimmick_stage() -> Stage:
 # -- the cues -----------------------------------------------------------------
 
 
-def test_every_tile_including_the_new_five_is_distinct_without_hue() -> None:
-    assets = ProceduralAssetLibrary(DEFAULT_RULES)
+EVERY_PALETTE = pytest.mark.parametrize(
+    "contrast", list(theme.PALETTES), ids=lambda mode: mode.value
+)
+"""Run a separation case once per shipped palette, named by the mode a player picks."""
+
+
+def library(contrast: theme.ContrastMode = theme.ContrastMode.DEFAULT) -> ProceduralAssetLibrary:
+    """The stand-in art drawn in the palette ``contrast`` selects."""
+    return ProceduralAssetLibrary(DEFAULT_RULES, theme.palette_for(contrast))
+
+
+@EVERY_PALETTE
+def test_every_tile_including_the_new_five_is_distinct_without_hue(
+    contrast: theme.ContrastMode,
+) -> None:
+    assets = library(contrast)
     shapes = {tile: luminance_pattern(assets.tile(tile)) for tile in Tile}
     assert len(set(shapes.values())) == len(Tile)
 
 
-def test_the_four_arrows_differ_from_each_other_without_hue() -> None:
+@EVERY_PALETTE
+def test_the_four_arrows_differ_from_each_other_without_hue(contrast: theme.ContrastMode) -> None:
     """Four orientations of one shape, which is the whole point of using a shape."""
-    assets = ProceduralAssetLibrary(DEFAULT_RULES)
+    assets = library(contrast)
     arrows = {tile: luminance_pattern(assets.tile(tile)) for tile in CONVEYOR_DIRECTIONS}
     assert len(set(arrows.values())) == 4
 
 
-def test_a_pad_does_not_look_like_a_belt_or_like_ground() -> None:
-    assets = ProceduralAssetLibrary(DEFAULT_RULES)
+@EVERY_PALETTE
+def test_a_pad_does_not_look_like_a_belt_or_like_ground(contrast: theme.ContrastMode) -> None:
+    assets = library(contrast)
     pad = luminance_pattern(assets.tile(Tile.TELEPORT_PAD))
     assert pad != luminance_pattern(assets.tile(Tile.EMPTY))
     for tile in CONVEYOR_DIRECTIONS:
         assert pad != luminance_pattern(assets.tile(tile))
+
+
+# -- the gimmick tiles are part of the palette, not beside it -----------------
+
+
+def test_the_default_palette_draws_the_gimmick_tiles_exactly_as_it_always_did() -> None:
+    """A player who never opens the options screen must see the same pixels as before.
+
+    The palette's gimmick fields default to the module constants the drawing code used
+    when there was only one palette, so the default library is pixel-for-pixel what it
+    was before contrast became a setting.
+    """
+    assert theme.DEFAULT_PALETTE.conveyor == theme.CONVEYOR
+    assert theme.DEFAULT_PALETTE.conveyor_rib == theme.CONVEYOR_RIB
+    assert theme.DEFAULT_PALETTE.conveyor_arrow == theme.CONVEYOR_ARROW
+    assert theme.DEFAULT_PALETTE.pad == theme.PAD
+    assert theme.DEFAULT_PALETTE.pad_ring == theme.PAD_RING
+    assert theme.DEFAULT_PALETTE.pad_link == theme.PAD_LINK
+
+
+@pytest.mark.parametrize("tile", list(GIMMICK_TILES))
+def test_a_contrast_palette_really_repaints_a_gimmick_tile(tile: TileCode) -> None:
+    """The gap this closes: a tile that ignored the palette would be identical here.
+
+    Every other terrain tile changes colour when the palette does. A gimmick tile that
+    had kept reading the module constants would be the one cell on the board still drawn
+    in the default look, and no separation test would have noticed.
+    """
+    art = TILE_ART[tile.value]
+    default = library(theme.ContrastMode.DEFAULT).tile(art)
+    high = library(theme.ContrastMode.HIGH).tile(art)
+    assert pixels(default) != pixels(high)
+
+
+@pytest.mark.parametrize("tile", list(GIMMICK_TILES))
+def test_switching_contrast_rebuilds_the_gimmick_art(tile: TileCode) -> None:
+    """``with_palette`` is how the running client switches, so it has to repaint these too.
+
+    A cache that handed back the surface it built in the old palette would leave the
+    board half-switched, which looks like a rendering fault rather than a setting.
+    """
+    art = TILE_ART[tile.value]
+    started = library(theme.ContrastMode.DEFAULT)
+    switched = started.with_palette(theme.HIGH_CONTRAST_PALETTE)
+    assert switched is not started
+    assert pixels(switched.tile(art)) == pixels(library(theme.ContrastMode.HIGH).tile(art))
+    assert pixels(started.tile(art)) == pixels(library(theme.ContrastMode.DEFAULT).tile(art))
 
 
 def test_the_drawn_arrow_agrees_with_the_push_the_simulation_applies() -> None:
@@ -110,20 +191,18 @@ def test_the_drawn_arrow_agrees_with_the_push_the_simulation_applies() -> None:
 @pytest.mark.parametrize("tile", list(GIMMICK_TILES))
 def test_a_gimmick_tile_is_exactly_one_cell(tile: TileCode) -> None:
     """Art cannot change collision geometry, including the art added by this change."""
-    assets = ProceduralAssetLibrary(DEFAULT_RULES)
+    assets = library()
     surface = assets.tile(TILE_ART[tile.value])
     assert surface.get_size() == (DEFAULT_RULES.tile_size, DEFAULT_RULES.tile_size)
 
 
 def test_nothing_about_a_cue_depends_on_a_frame_counter() -> None:
     """Reduced motion is satisfied by there being no motion to reduce."""
-    assets = ProceduralAssetLibrary(DEFAULT_RULES)
+    assets = library()
     for tile in GIMMICK_TILES:
         art = TILE_ART[tile.value]
         assert assets.tile(art) is assets.tile(art)
-        assert luminance_pattern(assets.tile(art)) == luminance_pattern(
-            ProceduralAssetLibrary(DEFAULT_RULES).tile(art)
-        )
+        assert luminance_pattern(assets.tile(art)) == luminance_pattern(library().tile(art))
 
 
 def test_the_playfield_draws_the_gimmick_terrain() -> None:
@@ -132,7 +211,7 @@ def test_the_playfield_draws_the_gimmick_terrain() -> None:
     surface = logical_surface()
     renderer().render(surface, shell)
 
-    assets = ProceduralAssetLibrary(DEFAULT_RULES)
+    assets = library()
     size = DEFAULT_RULES.tile_size
     origin_x, origin_y = theme.PLAYFIELD_ORIGIN
     for cell, tile in GIMMICK_CELLS.items():

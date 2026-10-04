@@ -22,11 +22,20 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from battle_city_client.online import OnlineConfig, OnlinePhase
+from battle_city_client.online import OnlineConfig, OnlinePhase, OnlineSession
 from battle_city_client.remote import RemoteStateError, terrain_from_rows
 from battle_city_client.shell import ClientShell
+from battle_city_client.spectator import SpectatorView
 from battle_city_content import Pack
-from battle_city_protocol import ContentRef, RejectionCode, client_channel
+from battle_city_protocol import (
+    BaseSnapshot,
+    ContentRef,
+    PlayerSnapshot,
+    RejectionCode,
+    SessionInfo,
+    StateSnapshot,
+    client_channel,
+)
 from battle_city_server import loopback_pair, stage_from_level
 from battle_city_sim import DEFAULT_RULES, Direction, GridPos, Tile, tile_code_char
 from multiplayer_helpers import (
@@ -216,3 +225,119 @@ def test_the_sample_arena_is_reachable_from_its_spawns(tmp_path: Path) -> None:
     assert stage.player_spawn_for(2).cell == GridPos(
         GIMMICK_SOURCE_PAD[0], GIMMICK_SOURCE_PAD[1] - 1
     )
+
+
+# -- the gate the session applies, not just the decoder it calls --------------
+
+
+def _keyframe(rows: tuple[str, ...]) -> StateSnapshot:
+    """A keyframe carrying ``rows`` and nothing else worth reading."""
+    return StateSnapshot(
+        session_id=SESSION_ID,
+        tick=0,
+        tick_rate=60,
+        state_version=1,
+        keyframe=True,
+        grid=rows,
+        tanks=(),
+        projectiles=(),
+        powerups=(),
+        players=(PlayerSnapshot(slot=1, lives=3, tank_id=1, spawn_x=8, spawn_y=10),),
+        base=BaseSnapshot(cell_x=8, cell_y=15, destroyed=False),
+        state_hash="0" * 64,
+    )
+
+
+def _session(version: int) -> OnlineSession:
+    """A client session that agreed to content schema ``version``."""
+    return OnlineSession(
+        session_id=SESSION_ID,
+        display_name="watcher",
+        content=ContentRef(
+            pack_id="gimmick-pack",
+            pack_version="1.0.0",
+            level_id=GIMMICK_LEVEL_ID,
+            content_schema_version=version,
+        ),
+        ticket=TICKETS[1],
+    )
+
+
+def test_a_session_decodes_a_keyframe_in_the_version_it_agreed_to() -> None:
+    """The gate lives on the session, which is the thing that knows what was agreed.
+
+    ``terrain_from_rows`` can only refuse the version it is handed. Asserting on it alone
+    would pass just as well if the session had stopped handing it the agreed version and
+    started assuming the newest one -- which is a one-argument change, in a file several
+    later merges touch, that would silently widen what this client will draw.
+    """
+    session = _session(2)
+    session.apply(_keyframe((GIMMICK_ROW,) * 15 + (BASE_ROW,)))
+
+    board = session.board
+    assert board is not None, session.notice
+    assert board.grid.at(GridPos(0, 0)) is Tile.CONVEYOR_N
+    assert board.grid.at(GridPos(4, 0)) is Tile.TELEPORT_PAD
+
+
+def test_a_version_one_session_refuses_a_gimmick_keyframe_rather_than_drawing_it() -> None:
+    session = _session(1)
+    session.apply(_keyframe((GIMMICK_ROW,) * 15 + (BASE_ROW,)))
+
+    assert session.board is None
+    assert "UNREADABLE" in session.notice.upper()
+    assert "version 1 does not define" in session.notice
+
+
+def test_a_version_one_session_still_draws_a_classic_keyframe() -> None:
+    """The gate narrows the alphabet; it does not refuse the one every peer shares."""
+    session = _session(1)
+    session.apply(_keyframe((EMPTY_ROW,) * 15 + (BASE_ROW,)))
+
+    board = session.board
+    assert board is not None, session.notice
+    assert board.grid.at(GridPos(8, 15)) is Tile.HOME
+
+
+# -- a watcher reads the same wire a player does ------------------------------
+
+
+def _watching(version: int) -> SpectatorView:
+    """A spectator view that has been told the session's terms and nothing else yet."""
+    view = SpectatorView()
+    view.opened(
+        SessionInfo(
+            tick_rate=60,
+            keyframe_interval=60,
+            max_players=2,
+            content=ContentRef(
+                pack_id="gimmick-pack",
+                pack_version="1.0.0",
+                level_id=GIMMICK_LEVEL_ID,
+                content_schema_version=version,
+            ),
+            rules_digest="0" * 64,
+            state_version=1,
+        ),
+        _keyframe((GIMMICK_ROW,) * 15 + (BASE_ROW,)),
+    )
+    return view
+
+
+def test_a_watcher_reads_gimmick_terrain_when_the_terms_say_version_two() -> None:
+    board = _watching(2).board
+    assert board is not None
+    assert board.grid.at(GridPos(0, 0)) is Tile.CONVEYOR_N
+    assert board.grid.at(GridPos(4, 0)) is Tile.TELEPORT_PAD
+
+
+def test_a_watcher_gets_no_wider_alphabet_than_a_player() -> None:
+    """A spectator is a reader of the same wire, so it is held to the same agreement.
+
+    The spectator seam arrived after the version gate did and decoded keyframe rows
+    without it, which would have drawn a watcher a board the session never agreed to --
+    the one direction in which a watcher could see more than the players.
+    """
+    view = _watching(1)
+    assert view.board is None
+    assert "version 1 does not define" in view.notice
