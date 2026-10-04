@@ -347,17 +347,29 @@ class EditorDocument:
         return self._validate(self.serialized())
 
     def save(self, *, overwrite: bool = False) -> Path:
-        """Validate and write to :attr:`path`, atomically, or refuse and write nothing."""
+        """Validate and write to :attr:`path`, atomically, or refuse and write nothing.
+
+        A save that succeeds records the version it declared, so the document carries the
+        same version the file on disk now does. Without that, a version 1 document that
+        gained a conveyor would write version 2 and still believe it was version 1:
+        erasing the conveyor and saving again would silently write version 1 back, and
+        the same edits would produce different files depending on whether the author had
+        reopened the file in between. Promoting here is the half of
+        :attr:`effective_schema_version` that outlives one edit -- a version is raised by
+        the content and then kept, never lowered by erasing what raised it.
+        """
         target = self.path
         if target is None:
             raise EditorRefusal("no save target; launch with --output to name one")
         self._require_writable(target, overwrite=overwrite)
+        declared = self.effective_schema_version
         payload = self.serialized()
         invalid = self._validate(payload, label=str(target))
         if invalid is not None:
             raise EditorRefusal(f"{target} would be invalid -- {invalid}")
         target.parent.mkdir(parents=True, exist_ok=True)
         _write_atomic(target, payload)
+        self.schema_version = declared
         self.dirty = False
         return target
 

@@ -22,6 +22,7 @@ answer for these tiles too.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pygame
@@ -29,7 +30,7 @@ import pytest
 from battle_city_client import ProceduralAssetLibrary, Renderer, theme
 from battle_city_client.assets import CONVEYOR_FACING
 from battle_city_client.editor import layout
-from battle_city_client.editor.document import EditorDocument
+from battle_city_client.editor.document import EditorDocument, EditorRefusal
 from battle_city_client.editor.layout import PALETTE_TILES
 from battle_city_client.editor.render import TILE_ART, EditorRenderer
 from battle_city_client.editor.state import EditorState, Tool
@@ -279,6 +280,62 @@ def test_a_gimmick_document_round_trips_through_the_loader(tmp_path: Path) -> No
     assert reopened.schema_version == GIMMICK_LEVEL_SCHEMA_VERSION
     assert reopened.grid_rows() == document.grid_rows()
     assert reopened.teleport_pads == (GridCell(2, 2), GridCell(12, 2))
+
+
+def test_a_saved_document_remembers_the_version_it_declared(tmp_path: Path) -> None:
+    """The regression: a save wrote version 2 and left the document believing it was 1.
+
+    Erasing the gimmick and saving again then wrote version 1 back, silently downgrading
+    a file that a version 2 pack manifest declares -- and the *same* two edits produced a
+    different file depending on whether the author had happened to reopen it in between.
+    A version is raised by the content and then kept; it is never lowered by erasing what
+    raised it, whether or not the file has been reopened.
+    """
+    document = EditorDocument.blank()
+    assert document.schema_version == LEVEL_SCHEMA_VERSION
+    document.paint(GridCell(3, 3), TileCode.CONVEYOR_E)
+    document.path = tmp_path / "authored.json"
+    document.save()
+    assert document.schema_version == GIMMICK_LEVEL_SCHEMA_VERSION
+
+    document.paint(GridCell(3, 3), TileCode.EMPTY)
+    assert not document.uses_gimmick_tiles
+    assert document.effective_schema_version == GIMMICK_LEVEL_SCHEMA_VERSION
+    document.save(overwrite=True)
+    assert json.loads(document.path.read_text())["schema_version"] == GIMMICK_LEVEL_SCHEMA_VERSION
+    assert EditorDocument.open(document.path).schema_version == GIMMICK_LEVEL_SCHEMA_VERSION
+
+
+def test_saving_without_reopening_writes_what_reopening_would(tmp_path: Path) -> None:
+    """The same edits, one document reopened in between, must produce the same bytes."""
+    straight = EditorDocument.blank()
+    straight.path = tmp_path / "straight.json"
+    straight.paint(GridCell(3, 3), TileCode.CONVEYOR_E)
+    straight.save()
+    straight.paint(GridCell(3, 3), TileCode.EMPTY)
+    straight.save(overwrite=True)
+
+    reopened = EditorDocument.blank()
+    reopened.path = tmp_path / "reopened.json"
+    reopened.paint(GridCell(3, 3), TileCode.CONVEYOR_E)
+    reopened.save()
+    carried = EditorDocument.open(reopened.path)
+    carried.path = reopened.path
+    carried.paint(GridCell(3, 3), TileCode.EMPTY)
+    carried.save(overwrite=True)
+
+    assert straight.path.read_bytes() == reopened.path.read_bytes()
+
+
+def test_a_refused_save_does_not_promote_the_version(tmp_path: Path) -> None:
+    """Nothing was written, so nothing about the document moved either."""
+    document = EditorDocument.blank()
+    document.paint(GridCell(2, 2), TileCode.TELEPORT_PAD)
+    document.path = tmp_path / "half-pair.json"
+    with pytest.raises(EditorRefusal):
+        document.save()
+    assert document.schema_version == LEVEL_SCHEMA_VERSION
+    assert not document.path.exists()
 
 
 def test_a_classic_document_still_saves_as_version_one(tmp_path: Path) -> None:
